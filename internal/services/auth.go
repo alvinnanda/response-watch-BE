@@ -70,6 +70,20 @@ func (a *AuthService) GetUserByEmail(ctx context.Context, email string) (*models
 	return user, nil
 }
 
+// GetUserByUsername retrieves a user by username (case-insensitive)
+func (a *AuthService) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("LOWER(username) = LOWER(?)", username).
+		Where("deleted_at IS NULL").
+		Scan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
 // GetUserByID retrieves a user by ID
 func (a *AuthService) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
 	user := new(models.User)

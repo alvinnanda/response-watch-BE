@@ -81,6 +81,15 @@ func (h *AuthHandler) Register(c fiber.Ctx) error {
 		})
 	}
 
+	// Check if username already exists
+	existingUsername, _ := h.authService.GetUserByUsername(ctx, req.Username)
+	if existingUsername != nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error":   "Conflict",
+			"message": "Username already taken",
+		})
+	}
+
 	// Create user
 	user, err := h.authService.CreateUser(ctx, req.Email, req.Password, req.Username, req.FullName, req.Organization)
 	if err != nil {
