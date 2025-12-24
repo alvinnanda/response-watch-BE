@@ -1,0 +1,95 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/boscod/responsewatch/config"
+	"github.com/boscod/responsewatch/internal/database"
+	"github.com/boscod/responsewatch/internal/middleware"
+	"github.com/boscod/responsewatch/internal/routes"
+	"github.com/boscod/responsewatch/internal/services"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/logger"
+	"github.com/gofiber/fiber/v3/middleware/recover"
+)
+
+func main() {
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Connect to database
+	db, err := database.Connect(cfg)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer database.Close()
+
+	log.Printf("Connected to database successfully")
+	_ = db // Mark as used
+
+	// Initialize services
+	jwtService := services.NewJWTService(cfg.JWTSecret, 168) // 7 days
+	cryptoService := services.NewCryptoService(cfg.AppSecret)
+	authService := services.NewAuthService(jwtService, cryptoService)
+
+	// Create Fiber app
+	app := fiber.New(fiber.Config{
+		AppName:       "ResponseWatch API",
+		CaseSensitive: true,
+		StrictRouting: false,
+		ServerHeader:  "ResponseWatch",
+		ErrorHandler:  customErrorHandler,
+	})
+
+	// Global middleware
+	app.Use(recover.New())
+	app.Use(logger.New(logger.Config{
+		Format:     "[${time}] ${status} - ${method} ${path} (${latency})\n",
+		TimeFormat: "2006-01-02 15:04:05",
+	}))
+	app.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+
+	// Setup routes
+	routes.SetupRoutes(app, jwtService, cryptoService, authService)
+
+	// Graceful shutdown
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+		log.Println("Shutting down server...")
+		if err := app.Shutdown(); err != nil {
+			log.Printf("Error shutting down: %v", err)
+		}
+	}()
+
+	// Start server
+	addr := fmt.Sprintf(":%s", cfg.Port)
+	log.Printf("Starting server on %s", addr)
+	log.Printf("Environment: %s", cfg.Env)
+	log.Printf("Allowed origins: %v", cfg.AllowedOrigins)
+
+	if err := app.Listen(addr); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func customErrorHandler(c fiber.Ctx, err error) error {
+	code := fiber.StatusInternalServerError
+
+	if e, ok := err.(*fiber.Error); ok {
+		code = e.Code
+	}
+
+	return c.Status(code).JSON(fiber.Map{
+		"error":   "Error",
+		"message": err.Error(),
+	})
+}
