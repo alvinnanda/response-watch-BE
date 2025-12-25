@@ -830,23 +830,69 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	}
 	offset := (page - 1) * limit
 
-	// 3. Parse Status Filter
+	// 3. Parse Filters
 	status := c.Query("status")
+	startDateStr := c.Query("start_date")
+	endDateStr := c.Query("end_date")
 
-	// 4. Build Query with Constraints
 	// Enforce 90-day limit
 	ninetyDaysAgo := time.Now().AddDate(0, 0, -90)
+	today := time.Now()
 
+	// Parse and validate start_date
+	var startDate time.Time
+	if startDateStr != "" {
+		parsed, err := time.Parse("2006-01-02", startDateStr)
+		if err == nil {
+			// Clamp to 90 days ago if older
+			if parsed.Before(ninetyDaysAgo) {
+				startDate = ninetyDaysAgo
+			} else {
+				startDate = parsed
+			}
+		} else {
+			// Invalid format, default to today
+			startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+		}
+	} else {
+		// No start_date provided, default to today (not 90 days ago)
+		startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+	}
+
+	// Parse and validate end_date (default to today)
+	var endDate time.Time
+	if endDateStr != "" {
+		parsed, err := time.Parse("2006-01-02", endDateStr)
+		if err == nil {
+			// Don't allow future dates
+			if parsed.After(today) {
+				endDate = today
+			} else {
+				endDate = parsed.Add(24 * time.Hour) // Include the full day
+			}
+		} else {
+			endDate = today.Add(24 * time.Hour)
+		}
+	} else {
+		endDate = today.Add(24 * time.Hour)
+	}
+
+	// 4. Build Query with Constraints
 	var requests []models.Request
 	query := database.DB.NewSelect().
 		Model(&requests).
-		Where("user_id = ?", user.ID).
-		Where("created_at >= ?", ninetyDaysAgo). // Strict 90-day limit
-		Where("deleted_at IS NULL").
-		Order("created_at DESC")
+		ColumnExpr("r.*").
+		ColumnExpr("u.is_public AS pic_is_public").
+		Join("LEFT JOIN users AS u ON r.user_id = u.id").
+		Where("r.user_id = ?", user.ID).
+		Where("r.deleted_at IS NULL").
+		Where("u.is_public = true").
+		Where("r.created_at >= ?", startDate).
+		Where("r.created_at < ?", endDate).
+		Order("r.created_at DESC")
 
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("r.status = ?", status)
 	}
 
 	// 5. Execute Count & Select

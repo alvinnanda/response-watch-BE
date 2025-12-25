@@ -11,7 +11,7 @@ import (
 // Limits: 10 requests per minute per IP
 func RateLimitMiddleware() fiber.Handler {
 	return limiter.New(limiter.Config{
-		Max:        15,
+		Max:        20,
 		Expiration: 1 * time.Minute,
 		KeyGenerator: func(c fiber.Ctx) string {
 			// Use X-Real-IP if available (behind nginx), otherwise use client IP

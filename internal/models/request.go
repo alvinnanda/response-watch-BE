@@ -58,6 +58,9 @@ type Request struct {
 
 	// Soft delete
 	DeletedAt *time.Time `bun:"deleted_at,soft_delete" json:"-"`
+
+	// Joined fields
+	PICIsPublic *bool `bun:"pic_is_public,scanonly" json:"pic_is_public,omitempty"`
 }
 
 // Request statuses
@@ -86,6 +89,7 @@ type RequestResponse struct {
 	FinishedAt          *string  `json:"finished_at,omitempty"`
 	DurationSeconds     *int     `json:"duration_seconds,omitempty"`
 	ResponseTimeSeconds *int     `json:"response_time_seconds,omitempty"`
+	PICIsPublic         *bool    `json:"pic_is_public,omitempty"`
 }
 
 func (r *Request) ToResponse() *RequestResponse {
@@ -105,6 +109,7 @@ func (r *Request) ToResponse() *RequestResponse {
 		CreatedAt:           r.CreatedAt.Format(time.RFC3339),
 		DurationSeconds:     r.DurationSeconds,
 		ResponseTimeSeconds: r.ResponseTimeSeconds,
+		PICIsPublic:         r.PICIsPublic,
 	}
 
 	if r.StartedAt != nil {
