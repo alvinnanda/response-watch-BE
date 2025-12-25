@@ -5,6 +5,7 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -796,6 +797,122 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 	return c.JSON(request.ToResponse())
 }
 
+// GetSharePage serves a static HTML page for social sharing
+func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
+	token := c.Params("token")
+
+	ctx := context.Background()
+	request := new(models.Request)
+
+	err := database.DB.NewSelect().
+		Model(request).
+		Where("url_token = ?", token).
+		Where("deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).SendString("Request not found")
+	}
+
+	// Decrypt Title
+	title, _ := h.cryptoService.Decrypt(request.TitleEncrypted)
+
+	// Generate Time Info
+	var timeInfo string
+	now := time.Now()
+
+	switch request.Status {
+	case models.StatusWaiting:
+		duration := now.Sub(request.CreatedAt)
+		timeInfo = fmt.Sprintf("Waiting for %s", formatDuration(duration))
+	case models.StatusInProgress:
+		if request.StartedAt != nil {
+			duration := now.Sub(*request.StartedAt)
+			timeInfo = fmt.Sprintf("In Progress for %s", formatDuration(duration))
+		} else {
+			timeInfo = "In Progress"
+		}
+	case models.StatusDone:
+		if request.DurationSeconds != nil {
+			duration := time.Duration(*request.DurationSeconds) * time.Second
+			timeInfo = fmt.Sprintf("Completed in %s", formatDuration(duration))
+		} else {
+			timeInfo = "Completed"
+		}
+	}
+
+	// Prepare frontend URL
+	frontendURL := "https://response-watch.web.app/t/" + token
+
+	html := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>%s | ResponseWatch</title>
+    
+    <!-- Open Graph / Facebook / WhatsApp -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="%s">
+    <meta property="og:title" content="%s">
+    <meta property="og:description" content="Status: %s • %s">
+    <meta property="og:site_name" content="ResponseWatch">
+    
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:title" content="%s">
+    <meta property="twitter:description" content="Status: %s • %s">
+    
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f4f4f5; color: #18181b; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); max-width: 400px; width: 90%%; text-align: center; }
+        h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+        p { color: #52525b; margin-bottom: 1.5rem; }
+        .btn { display: inline-block; background-color: #2563eb; color: white; padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
+        .btn:hover { background-color: #1d4ed8; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>%s</h1>
+        <p>Status: <strong>%s</strong><br>%s</p>
+        <a href="%s" class="btn">View Request</a>
+    </div>
+    <script>
+        // Auto-redirect after short delay
+        setTimeout(function() {
+            window.location.href = "%s";
+        }, 1000);
+    </script>
+</body>
+</html>`,
+		title,                    // Title tag
+		frontendURL,              // og:url
+		title,                    // og:title
+		request.Status, timeInfo, // og:desc
+		title,                    // twitter:title
+		request.Status, timeInfo, // twitter:desc
+		title,                    // h1
+		request.Status, timeInfo, // p content
+		frontendURL, // button href
+		frontendURL, // script redirect
+	)
+
+	c.Set("Content-Type", "text/html")
+	return c.SendString(html)
+}
+
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
 // GetPublicRequestsByUsername handles getting requests by username (public monitoring)
 func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	username := c.Params("username")
@@ -935,278 +1052,6 @@ func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
 	})
 }
 
-// GetSharePage serves a static HTML page for social sharing
-func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
-	// 	token := c.Params("token")
-	//
-	// 	ctx := context.Background()
-	// 	request := new(models.Request)
-	//
-	// 	err := database.DB.NewSelect().
-	// 		Model(request).
-	// 		Where("url_token = ?", token).
-	// 		Where("deleted_at IS NULL").
-	// 		Scan(ctx)
-	//
-	// 	if err != nil {
-	return c.Status(fiber.StatusNotFound).SendString("Request not found")
-	// 	}
-	//
-	// 	// Decrypt Title
-	// 	title, _ := h.cryptoService.Decrypt(request.TitleEncrypted)
-	//
-	// 	// Generate Time Info
-	// 	var timeInfo string
-	// 	now := time.Now()
-	//
-	// 	switch request.Status {
-	// 	case models.StatusWaiting:
-	// 		duration := now.Sub(request.CreatedAt)
-	// 		timeInfo = fmt.Sprintf("Waiting for %s", formatDuration(duration))
-	// 	case models.StatusInProgress:
-	// 		if request.StartedAt != nil {
-	// 			duration := now.Sub(*request.StartedAt)
-	// 			timeInfo = fmt.Sprintf("In Progress for %s", formatDuration(duration))
-	// 		} else {
-	// 			timeInfo = "In Progress"
-	// 		}
-	// 	case models.StatusDone:
-	// 		if request.DurationSeconds != nil {
-	// 			duration := time.Duration(*request.DurationSeconds) * time.Second
-	// 			timeInfo = fmt.Sprintf("Completed in %s", formatDuration(duration))
-	// 		} else {
-	// 			timeInfo = "Completed"
-	// 		}
-	// 	}
-	//
-	// 	// Prepare frontend URL (assuming configured or default)
-	// 	// We can get BaseURL from config if available, here we might hardcode or use Host header but safer to use known domain
-	// 	// For now, let's use a standard placeholder or try to infer.
-	// 	// The user mentioned "arahkan ke BE link", which implies the share link itself IS this page.
-	// 	// And this page should redirect to FE.
-	// 	frontendURL := "https://response-watch.web.app/t/" + token
-	//
-	// 	html := fmt.Sprintf(`<!DOCTYPE html>
-	// <html lang="en">
-	// <head>
-	//     <meta charset="UTF-8">
-	//     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-	//     <title>%s | ResponseWatch</title>
-	//
-	//     <!-- Open Graph / Facebook / WhatsApp -->
-	//     <meta property="og:type" content="website">
-	//     <meta property="og:url" content="%s">
-	//     <meta property="og:title" content="%s">
-	//     <meta property="og:description" content="Status: %s • %s">
-	//     <meta property="og:site_name" content="ResponseWatch">
-	//
-	//     <!-- Twitter -->
-	//     <meta property="twitter:card" content="summary_large_image">
-	//     <meta property="twitter:title" content="%s">
-	//     <meta property="twitter:description" content="Status: %s • %s">
-	//
-	//     <style>
-	//         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f4f4f5; color: #18181b; }
-	//         .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); max-width: 400px; width: 90%%; text-align: center; }
-	//         h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
-	//         p { color: #52525b; margin-bottom: 1.5rem; }
-	//         .btn { display: inline-block; background-color: #2563eb; color: white; padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
-	//         .btn:hover { background-color: #1d4ed8; }
-	//     </style>
-	// </head>
-	// <body>
-	//     <div class="card">
-	//         <h1>%s</h1>
-	//         <p>Status: <strong>%s</strong><br>%s</p>
-	//         <a href="%s" class="btn">View Request</a>
-	//     </div>
-	//     <script>
-	//         // Auto-redirect after short delay
-	//         setTimeout(function() {
-	//             window.location.href = "%s";
-	//         }, 1000);
-	//     </script>
-	// </body>
-	// </html>`,
-	// 		title,    // Title tag
-	// 		frontendURL, // og:url
-	// 		title,    // og:title
-	// 		request.Status, timeInfo, // og:desc
-	// 		title,    // twitter:title
-	// 		request.Status, timeInfo, // twitter:desc
-	// 		title,    // h1
-	// 		request.Status, timeInfo, // p content
-	// 		frontendURL, // button href
-	// 		frontendURL, // script redirect
-	// 	)
-	//
-	// 	c.Set("Content-Type", "text/html")
-	// 	return c.SendString(html)
-	// }
-	//
-	// func formatDuration(d time.Duration) string {
-	// 	d = d.Round(time.Minute)
-	// 	h := d / time.Hour
-	// 	d -= h * time.Hour
-	// 	m := d / time.Minute
-	// 	if h > 0 {
-	// 		return fmt.Sprintf("%dh %dm", h, m)
-	// 	}
-	// 	return fmt.Sprintf("%dm", m)
-	// }
-	username := c.Params("username")
-
-	ctx := context.Background()
-
-	// 1. Find User
-	user := new(models.User)
-	err := database.DB.NewSelect().
-		Model(user).
-		Where("username = ?", username).
-		Scan(ctx)
-
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-			"error":   "Not Found",
-			"message": "User not found",
-		})
-	}
-
-	// 2. Parse Pagination
-	page := 1
-	limit := 10
-	if p, err := strconv.Atoi(c.Query("page", "1")); err == nil && p > 0 {
-		page = p
-	}
-	if l, err := strconv.Atoi(c.Query("limit", "10")); err == nil && l > 0 && l <= 50 {
-		limit = l
-	}
-	if page < 1 {
-		page = 1
-	}
-	offset := (page - 1) * limit
-
-	// 3. Parse Filters
-	status := c.Query("status")
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	// Enforce 90-day limit
-	ninetyDaysAgo := time.Now().AddDate(0, 0, -90)
-	today := time.Now()
-
-	// Parse and validate start_date
-	var startDate time.Time
-	if startDateStr != "" {
-		parsed, err := time.Parse("2006-01-02", startDateStr)
-		if err == nil {
-			// Clamp to 90 days ago if older
-			if parsed.Before(ninetyDaysAgo) {
-				startDate = ninetyDaysAgo
-			} else {
-				startDate = parsed
-			}
-		} else {
-			// Invalid format, default to today
-			startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
-		}
-	} else {
-		// No start_date provided, default to today (not 90 days ago)
-		startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
-	}
-
-	// Parse and validate end_date (default to today)
-	var endDate time.Time
-	if endDateStr != "" {
-		parsed, err := time.Parse("2006-01-02", endDateStr)
-		if err == nil {
-			// Don't allow future dates
-			if parsed.After(today) {
-				endDate = today
-			} else {
-				endDate = parsed.Add(24 * time.Hour) // Include the full day
-			}
-		} else {
-			endDate = today.Add(24 * time.Hour)
-		}
-	} else {
-		endDate = today.Add(24 * time.Hour)
-	}
-
-	// 4. Build Query with Constraints
-	var requests []models.Request
-	query := database.DB.NewSelect().
-		Model(&requests).
-		ColumnExpr("r.*").
-		ColumnExpr("u.is_public AS pic_is_public").
-		Join("LEFT JOIN users AS u ON r.user_id = u.id").
-		Where("r.user_id = ?", user.ID).
-		Where("r.deleted_at IS NULL").
-		Where("u.is_public = true").
-		Where("r.created_at >= ?", startDate).
-		Where("r.created_at < ?", endDate).
-		Order("r.created_at DESC")
-
-	if status != "" {
-		query = query.Where("r.status = ?", status)
-	}
-
-	// 5. Execute Count & Select
-	total, err := query.Count(ctx)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Internal Server Error",
-			"message": "Failed to count requests",
-		})
-	}
-
-	err = query.Limit(limit).Offset(offset).Scan(ctx)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Internal Server Error",
-			"message": "Failed to fetch requests",
-		})
-	}
-
-	// 6. Decrypt info (Title/Desc only) - Keep secure link private?
-	// The requirement is public monitoring. Usually titles are safe.
-	for i := range requests {
-		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
-		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
-		// Hide edit/followup links for public view?
-		// For now, let's just decrypt them. The frontend can choose what to show.
-		// Actually, followup link might be sensitive if it's a private meeting link.
-		// But the "Smart Link" page itself is public via token.
-		// Let's decrypt common fields.
-		requests[i].FollowupLink, _ = h.cryptoService.DecryptPtr(requests[i].FollowupLinkEncrypted)
-	}
-
-	responses := make([]*models.RequestResponse, len(requests))
-	for i := range requests {
-		responses[i] = requests[i].ToResponse()
-	}
-
-	totalPages := total / limit
-	if total%limit != 0 {
-		totalPages++
-	}
-
-	return c.JSON(fiber.Map{
-		"requests": responses,
-		"pagination": fiber.Map{
-			"page":        page,
-			"limit":       limit,
-			"total":       total,
-			"total_pages": totalPages,
-		},
-		"user": fiber.Map{
-			"username":     user.Username,
-			"full_name":    user.FullName,
-			"organization": user.Organization,
-		},
-	})
-}
-
 // generateURLToken generates a cryptographically secure random URL-safe token
 func generateURLToken(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -1219,158 +1064,4 @@ func generateURLToken(length int) string {
 		b[i] = charset[int(b[i])%len(charset)]
 	}
 	return string(b)
-}
-
-// GetDashboardMonitoringRequests handles getting requests for the dashboard monitoring page
-// Identical to public monitoring but for the authenticated user and without public check
-func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
-	userID := middleware.GetUserID(c)
-	if userID == 0 {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "Unauthorized",
-		})
-	}
-
-	ctx := context.Background()
-
-	// 1. Find User
-	user := new(models.User)
-	err := database.DB.NewSelect().
-		Model(user).
-		Where("id = ?", userID).
-		Scan(ctx)
-
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
-			"error":   "Not Found",
-			"message": "User not found",
-		})
-	}
-
-	// 2. Parse Pagination
-	page := 1
-	limit := 10
-	if p, err := strconv.Atoi(c.Query("page", "1")); err == nil && p > 0 {
-		page = p
-	}
-	if l, err := strconv.Atoi(c.Query("limit", "10")); err == nil && l > 0 && l <= 50 {
-		limit = l
-	}
-	if page < 1 {
-		page = 1
-	}
-	offset := (page - 1) * limit
-
-	// 3. Parse Filters
-	status := c.Query("status")
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	// Enforce 90-day limit
-	ninetyDaysAgo := time.Now().AddDate(0, 0, -90)
-	today := time.Now()
-
-	// Parse and validate start_date
-	var startDate time.Time
-	if startDateStr != "" {
-		parsed, err := time.Parse("2006-01-02", startDateStr)
-		if err == nil {
-			// Clamp to 90 days ago if older
-			if parsed.Before(ninetyDaysAgo) {
-				startDate = ninetyDaysAgo
-			} else {
-				startDate = parsed
-			}
-		} else {
-			// Invalid format, default to today
-			startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
-		}
-	} else {
-		// No start_date provided, default to today
-		startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
-	}
-
-	// Parse and validate end_date (default to today)
-	var endDate time.Time
-	if endDateStr != "" {
-		parsed, err := time.Parse("2006-01-02", endDateStr)
-		if err == nil {
-			// Don't allow future dates
-			if parsed.After(today) {
-				endDate = today
-			} else {
-				endDate = parsed.Add(24 * time.Hour) // Include the full day
-			}
-		} else {
-			endDate = today.Add(24 * time.Hour)
-		}
-	} else {
-		endDate = today.Add(24 * time.Hour)
-	}
-
-	// 4. Build Query with Constraints
-	var requests []models.Request
-	query := database.DB.NewSelect().
-		Model(&requests).
-		ColumnExpr("r.*").
-		ColumnExpr("u.is_public AS pic_is_public").
-		Join("LEFT JOIN users AS u ON r.user_id = u.id").
-		Where("r.user_id = ?", user.ID).
-		Where("r.deleted_at IS NULL").
-		Where("r.created_at >= ?", startDate).
-		Where("r.created_at < ?", endDate).
-		Order("r.created_at DESC")
-
-	if status != "" {
-		query = query.Where("r.status = ?", status)
-	}
-
-	// 5. Execute Count & Select
-	total, err := query.Count(ctx)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Internal Server Error",
-			"message": "Failed to count requests",
-		})
-	}
-
-	err = query.Limit(limit).Offset(offset).Scan(ctx)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Internal Server Error",
-			"message": "Failed to fetch requests",
-		})
-	}
-
-	// 6. Decrypt info
-	for i := range requests {
-		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
-		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
-		requests[i].FollowupLink, _ = h.cryptoService.DecryptPtr(requests[i].FollowupLinkEncrypted)
-	}
-
-	responses := make([]*models.RequestResponse, len(requests))
-	for i := range requests {
-		responses[i] = requests[i].ToResponse()
-	}
-
-	totalPages := total / limit
-	if total%limit != 0 {
-		totalPages++
-	}
-
-	return c.JSON(fiber.Map{
-		"requests": responses,
-		"pagination": fiber.Map{
-			"page":        page,
-			"limit":       limit,
-			"total":       total,
-			"total_pages": totalPages,
-		},
-		"user": fiber.Map{
-			"username":     user.Username,
-			"full_name":    user.FullName,
-			"organization": user.Organization,
-		},
-	})
 }
