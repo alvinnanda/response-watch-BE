@@ -964,3 +964,157 @@ func generateURLToken(length int) string {
 	}
 	return string(b)
 }
+
+// GetDashboardMonitoringRequests handles getting requests for the dashboard monitoring page
+// Identical to public monitoring but for the authenticated user and without public check
+func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	ctx := context.Background()
+
+	// 1. Find User
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("id = ?", userID).
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "User not found",
+		})
+	}
+
+	// 2. Parse Pagination
+	page := 1
+	limit := 10
+	if p, err := strconv.Atoi(c.Query("page", "1")); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(c.Query("limit", "10")); err == nil && l > 0 && l <= 50 {
+		limit = l
+	}
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	// 3. Parse Filters
+	status := c.Query("status")
+	startDateStr := c.Query("start_date")
+	endDateStr := c.Query("end_date")
+
+	// Enforce 90-day limit
+	ninetyDaysAgo := time.Now().AddDate(0, 0, -90)
+	today := time.Now()
+
+	// Parse and validate start_date
+	var startDate time.Time
+	if startDateStr != "" {
+		parsed, err := time.Parse("2006-01-02", startDateStr)
+		if err == nil {
+			// Clamp to 90 days ago if older
+			if parsed.Before(ninetyDaysAgo) {
+				startDate = ninetyDaysAgo
+			} else {
+				startDate = parsed
+			}
+		} else {
+			// Invalid format, default to today
+			startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+		}
+	} else {
+		// No start_date provided, default to today
+		startDate = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+	}
+
+	// Parse and validate end_date (default to today)
+	var endDate time.Time
+	if endDateStr != "" {
+		parsed, err := time.Parse("2006-01-02", endDateStr)
+		if err == nil {
+			// Don't allow future dates
+			if parsed.After(today) {
+				endDate = today
+			} else {
+				endDate = parsed.Add(24 * time.Hour) // Include the full day
+			}
+		} else {
+			endDate = today.Add(24 * time.Hour)
+		}
+	} else {
+		endDate = today.Add(24 * time.Hour)
+	}
+
+	// 4. Build Query with Constraints
+	var requests []models.Request
+	query := database.DB.NewSelect().
+		Model(&requests).
+		ColumnExpr("r.*").
+		ColumnExpr("u.is_public AS pic_is_public").
+		Join("LEFT JOIN users AS u ON r.user_id = u.id").
+		Where("r.user_id = ?", user.ID).
+		Where("r.deleted_at IS NULL").
+		Where("r.created_at >= ?", startDate).
+		Where("r.created_at < ?", endDate).
+		Order("r.created_at DESC")
+
+	if status != "" {
+		query = query.Where("r.status = ?", status)
+	}
+
+	// 5. Execute Count & Select
+	total, err := query.Count(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to count requests",
+		})
+	}
+
+	err = query.Limit(limit).Offset(offset).Scan(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch requests",
+		})
+	}
+
+	// 6. Decrypt info
+	for i := range requests {
+		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
+		requests[i].FollowupLink, _ = h.cryptoService.DecryptPtr(requests[i].FollowupLinkEncrypted)
+	}
+
+	responses := make([]*models.RequestResponse, len(requests))
+	for i := range requests {
+		responses[i] = requests[i].ToResponse()
+	}
+
+	totalPages := total / limit
+	if total%limit != 0 {
+		totalPages++
+	}
+
+	return c.JSON(fiber.Map{
+		"requests": responses,
+		"pagination": fiber.Map{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+		"user": fiber.Map{
+			"username":     user.Username,
+			"full_name":    user.FullName,
+			"organization": user.Organization,
+		},
+	})
+}

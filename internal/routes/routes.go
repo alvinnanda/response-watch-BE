@@ -53,6 +53,8 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 
 	// Request routes
 	protected.Get("/requests/stats", requestHandler.Stats)
+	// Add dedicated monitoring endpoint for dashboard
+	protected.Get("/requests/monitoring", requestHandler.GetDashboardMonitoringRequests)
 	protected.Get("/requests", requestHandler.List)
 	protected.Post("/requests", requestHandler.Create)
 	protected.Get("/requests/:id", requestHandler.Get)

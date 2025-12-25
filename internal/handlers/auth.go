@@ -229,6 +229,7 @@ type UpdateProfileRequest struct {
 	Username     *string `json:"username,omitempty"`
 	FullName     *string `json:"full_name,omitempty"`
 	Organization *string `json:"organization,omitempty"`
+	IsPublic     *bool   `json:"is_public,omitempty"`
 }
 
 // UpdateProfile updates the current user's profile
@@ -260,7 +261,7 @@ func (h *AuthHandler) UpdateProfile(c fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
-	user, err := h.authService.UpdateProfile(ctx, userID, req.Username, req.FullName, req.Organization)
+	user, err := h.authService.UpdateProfile(ctx, userID, req.Username, req.FullName, req.Organization, req.IsPublic)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error":   "Internal Server Error",
