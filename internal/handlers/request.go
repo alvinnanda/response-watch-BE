@@ -1021,6 +1021,9 @@ func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
 		Where("user_id = ?", userID).
 		Where("deleted_at IS NULL")
 
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
 	if startDate != "" {
 		query = query.Where("created_at >= ?", startDate)
 	}
