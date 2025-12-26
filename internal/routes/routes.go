@@ -40,6 +40,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	public.Post("/t/:token/start", requestHandler.StartResponse)
 	public.Post("/t/:token/finish", requestHandler.FinishResponse)
 	public.Post("/requests", requestHandler.CreatePublic)
+	public.Post("/requests/:username", requestHandler.CreatePublicForUser)
 
 	// Share page (Static HTML) - Hosted at root /share/:token (no /api prefix)
 	app.Get("/share/:token", requestHandler.GetSharePage)

@@ -300,6 +300,189 @@ func (h *RequestHandler) CreatePublic(c fiber.Ctx) error {
 	})
 }
 
+// CreatePublicForUser handles creating a request for a specific user without authentication
+// Rate limited by device fingerprint (10/month)
+func (h *RequestHandler) CreatePublicForUser(c fiber.Ctx) error {
+	username := c.Params("username")
+	if username == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Username is required",
+		})
+	}
+
+	ctx := context.Background()
+
+	// 1. Find User by username
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("username = ?", username).
+		Where("deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "User not found",
+		})
+	}
+
+	// 2. Check if user is public
+	if !user.IsPublic {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":   "Forbidden",
+			"message": "This user does not accept public requests",
+		})
+	}
+
+	var payload PublicCreatePayload
+	if err := c.Bind().JSON(&payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Invalid request body",
+		})
+	}
+
+	if payload.Title == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Title is required",
+		})
+	}
+
+	if payload.Fingerprint == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Device fingerprint is required",
+		})
+	}
+
+	// Hash the fingerprint
+	hash := sha256.Sum256([]byte(payload.Fingerprint))
+	fingerprintHash := hex.EncodeToString(hash[:])
+
+	// Get real IP for rate limit check
+	realIP := middleware.GetRealIP(c)
+
+	// Check monthly usage limit (10 per month)
+	// Single query: check fingerprint OR IP to prevent manipulation
+	const monthlyLimit = 10
+	startOfMonth := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -time.Now().Day()+1)
+
+	usageCount, _ := database.DB.NewSelect().
+		Model((*models.DeviceUsage)(nil)).
+		Where("(fingerprint_hash = ? OR real_ip = ?)", fingerprintHash, realIP).
+		Where("action = ?", models.ActionCreateRequest).
+		Where("created_at >= ?", startOfMonth).
+		Count(ctx)
+
+	if usageCount >= monthlyLimit {
+		// Calculate next month reset
+		nextMonth := startOfMonth.AddDate(0, 1, 0)
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error":           "Monthly limit exceeded",
+			"message":         "You've used 10/10 free requests this month. Login for unlimited access.",
+			"remaining_quota": 0,
+			"reset_at":        nextMonth.Format(time.RFC3339),
+		})
+	}
+
+	// Encrypt title and description
+	titleEncrypted, err := h.cryptoService.Encrypt(payload.Title)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to encrypt data",
+			"details": err.Error(),
+		})
+	}
+
+	descEncrypted, err := h.cryptoService.EncryptPtr(payload.Description)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to encrypt data",
+		})
+	}
+
+	followupEncrypted, err := h.cryptoService.EncryptPtr(payload.FollowupLink)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to encrypt data",
+		})
+	}
+
+	// Generate URL token with retry
+	var urlToken string
+	const maxRetries = 3
+	for i := 0; i < maxRetries; i++ {
+		urlToken = generateURLToken(8)
+		exists, _ := database.DB.NewSelect().
+			Model((*models.Request)(nil)).
+			Where("url_token = ?", urlToken).
+			Exists(ctx)
+		if !exists {
+			break
+		}
+		if i == maxRetries-1 {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":   "Internal Server Error",
+				"message": "Failed to generate unique token",
+			})
+		}
+	}
+
+	// Get client info for logging
+	clientIP := c.IP()
+	userAgent := c.Get("User-Agent")
+
+	// Create request (assigned to user.ID)
+	request := &models.Request{
+		UserID:                &user.ID, // Assigned to the specific user
+		URLToken:              urlToken,
+		TitleEncrypted:        titleEncrypted,
+		DescriptionEncrypted:  descEncrypted,
+		FollowupLinkEncrypted: followupEncrypted,
+		Status:                models.StatusWaiting,
+		EmbeddedPICList:       []string{},
+	}
+
+	_, err = database.DB.NewInsert().Model(request).Exec(ctx)
+	if err != nil {
+		log.Printf("[CreatePublicForUser] Failed to insert request: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to create request",
+		})
+	}
+
+	// Log device usage
+	deviceUsage := &models.DeviceUsage{
+		FingerprintHash: fingerprintHash,
+		Action:          models.ActionCreateRequest,
+		IPAddress:       &clientIP,
+		RealIP:          &realIP,
+		UserAgent:       &userAgent,
+	}
+	database.DB.NewInsert().Model(deviceUsage).Exec(ctx)
+
+	// Decrypt for response
+	request.Title = payload.Title
+	request.Description = payload.Description
+	request.FollowupLink = payload.FollowupLink
+
+	// Return with remaining quota
+	remainingQuota := monthlyLimit - usageCount - 1
+
+	response := request.ToResponse()
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"request":         response,
+		"remaining_quota": remainingQuota,
+	})
+}
+
 // List handles listing user's requests with pagination and filters
 func (h *RequestHandler) List(c fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
@@ -949,7 +1132,8 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	query := database.DB.NewSelect().
 		Model(&requests).
 		Where("user_id = ?", user.ID).
-		Where("deleted_at IS NULL")
+		Where("deleted_at IS NULL").
+		Where("is_public = true")
 
 	// Filter by date range if provided, otherwise default to "today" (last 24h) or specific logic?
 	// For public monitoring, usually we show active stuff or recent stuff.
