@@ -884,7 +884,7 @@ func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
         // Auto-redirect after short delay
         setTimeout(function() {
             window.location.href = "%s";
-        }, 1000);
+        }, 10);
     </script>
 </body>
 </html>`,
