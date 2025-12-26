@@ -15,8 +15,8 @@ type Request struct {
 	UUID uuid.UUID `bun:"uuid,notnull,unique,default:gen_random_uuid()" json:"uuid"`
 
 	// Ownership
-	UserID int64 `bun:"user_id,notnull" json:"user_id"`
-	User   *User `bun:"rel:belongs-to,join:user_id=id" json:"user,omitempty"`
+	UserID *int64 `bun:"user_id" json:"user_id"`
+	User   *User  `bun:"rel:belongs-to,join:user_id=id" json:"user,omitempty"`
 
 	// Public access token
 	URLToken string `bun:"url_token,notnull,unique" json:"url_token"`

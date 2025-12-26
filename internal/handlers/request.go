@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -115,7 +116,7 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 	}
 
 	request := &models.Request{
-		UserID:                userID,
+		UserID:                &userID,
 		URLToken:              urlToken,
 		TitleEncrypted:        titleEncrypted,
 		DescriptionEncrypted:  descEncrypted,
@@ -254,9 +255,9 @@ func (h *RequestHandler) CreatePublic(c fiber.Ctx) error {
 	clientIP := c.IP()
 	userAgent := c.Get("User-Agent")
 
-	// Create request (user_id = 0 for public requests)
+	// Create request (user_id = nil for public requests)
 	request := &models.Request{
-		UserID:                0, // No user for public requests
+		UserID:                nil, // No user for public requests
 		URLToken:              urlToken,
 		TitleEncrypted:        titleEncrypted,
 		DescriptionEncrypted:  descEncrypted,
@@ -267,6 +268,7 @@ func (h *RequestHandler) CreatePublic(c fiber.Ctx) error {
 
 	_, err = database.DB.NewInsert().Model(request).Exec(ctx)
 	if err != nil {
+		log.Printf("[CreatePublic] Failed to insert request: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error":   "Internal Server Error",
 			"message": "Failed to create request",
