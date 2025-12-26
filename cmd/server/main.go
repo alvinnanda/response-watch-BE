@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/boscod/responsewatch/config"
@@ -49,7 +50,14 @@ func main() {
 	})
 
 	// Global middleware
-	app.Use(recover.New())
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace: true,
+		StackTraceHandler: func(c fiber.Ctx, e any) {
+			log.Printf("🔥 PANIC RECOVERED: %v", e)
+			log.Printf("📍 Request: %s %s", c.Method(), c.Path())
+			log.Printf("📋 Stack Trace:\n%s", string(debug.Stack()))
+		},
+	}))
 	app.Use(logger.New(logger.Config{
 		Format:     "[${time}] ${status} - ${method} ${path} (${latency})\n",
 		TimeFormat: "2006-01-02 15:04:05",
