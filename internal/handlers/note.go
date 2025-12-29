@@ -35,6 +35,7 @@ func (h *NoteHandler) CreateNote(c fiber.Ctx) error {
 		WebhookPayload  *string                `json:"webhook_payload"`
 		BackgroundColor string                 `json:"background_color"`
 		Tagline         string                 `json:"tagline"`
+		RequestUUID     *uuid.UUID             `json:"request_uuid"`
 	}
 
 	if err := c.Bind().Body(&req); err != nil {
@@ -58,6 +59,7 @@ func (h *NoteHandler) CreateNote(c fiber.Ctx) error {
 		WebhookPayload:  req.WebhookPayload,
 		BackgroundColor: req.BackgroundColor,
 		Tagline:         req.Tagline,
+		RequestUUID:     req.RequestUUID,
 	}
 
 	if req.RemindAt != nil && *req.RemindAt != "" {
@@ -94,6 +96,7 @@ func (h *NoteHandler) UpdateNote(c fiber.Ctx) error {
 		WebhookPayload  *string                `json:"webhook_payload"`
 		BackgroundColor string                 `json:"background_color"`
 		Tagline         string                 `json:"tagline"`
+		RequestUUID     *uuid.UUID             `json:"request_uuid"`
 	}
 
 	if err := c.Bind().Body(&req); err != nil {
@@ -125,6 +128,7 @@ func (h *NoteHandler) UpdateNote(c fiber.Ctx) error {
 	existing.WebhookPayload = req.WebhookPayload
 	existing.BackgroundColor = req.BackgroundColor
 	existing.Tagline = req.Tagline
+	existing.RequestUUID = req.RequestUUID
 
 	if req.RemindAt != nil {
 		if *req.RemindAt == "" {
@@ -178,6 +182,11 @@ func (h *NoteHandler) GetNotes(c fiber.Ctx) error {
 			// Add 24h to include the end date fully
 			t = t.Add(24 * time.Hour)
 			filters.EndDate = &t
+		}
+	}
+	if requestUUID := c.Query("request_uuid"); requestUUID != "" {
+		if uid, err := uuid.Parse(requestUUID); err == nil {
+			filters.RequestUUID = &uid
 		}
 	}
 

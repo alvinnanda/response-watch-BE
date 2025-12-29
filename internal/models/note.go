@@ -29,8 +29,10 @@ type Note struct {
 	WebhookPayload  *string         `bun:"webhook_payload" json:"webhook_payload,omitempty"`
 	BackgroundColor string          `bun:"background_color" json:"background_color,omitempty"`
 	Tagline         string          `bun:"tagline" json:"tagline,omitempty"`
-	CreatedAt       time.Time       `bun:"created_at,nullzero,notnull,default:current_timestamp" json:"created_at"`
-	UpdatedAt       time.Time       `bun:"updated_at,nullzero,default:now()" json:"updated_at"`
+
+	RequestUUID *uuid.UUID `bun:"request_uuid,type:uuid" json:"request_uuid,omitempty"`
+	CreatedAt   time.Time  `bun:"created_at,nullzero,notnull,default:current_timestamp" json:"created_at"`
+	UpdatedAt   time.Time  `bun:"updated_at,nullzero,default:now()" json:"updated_at"`
 }
 
 // BeforeInsert hook

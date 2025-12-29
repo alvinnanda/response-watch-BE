@@ -20,12 +20,13 @@ func NewNoteService() *NoteService {
 
 // NoteFilters defines available filters for listing notes
 type NoteFilters struct {
-	UserID    int64
-	StartDate *time.Time
-	EndDate   *time.Time
-	Search    string
-	Limit     int
-	Offset    int
+	UserID      int64
+	StartDate   *time.Time
+	EndDate     *time.Time
+	Search      string
+	Limit       int
+	Offset      int
+	RequestUUID *uuid.UUID
 }
 
 // CreateOrUpdateNote saves the note and schedules a reminder if needed
@@ -50,7 +51,8 @@ func (s *NoteService) CreateOrUpdateNote(ctx context.Context, note *models.Note)
 		Set("webhook_payload = EXCLUDED.webhook_payload").
 		Set("background_color = EXCLUDED.background_color").
 		Set("tagline = EXCLUDED.tagline").
-		Set("updated_at = NOW()").
+		Set("request_uuid = EXCLUDED.request_uuid").
+		Set("updated_at = ?", time.Now()).
 		Exec(ctx)
 
 	if err != nil {
@@ -104,6 +106,9 @@ func (s *NoteService) GetNotes(ctx context.Context, filters NoteFilters) ([]mode
 		Where("user_id = ?", filters.UserID).
 		Order("created_at DESC") // Default sort
 
+	if filters.RequestUUID != nil {
+		query.Where("request_uuid = ?", filters.RequestUUID)
+	}
 	if filters.StartDate != nil {
 		query.Where("created_at >= ?", filters.StartDate)
 	}
