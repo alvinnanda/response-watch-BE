@@ -1,0 +1,2 @@
+ALTER TABLE notes DROP COLUMN IF EXISTS webhook_url;
+ALTER TABLE notes DROP COLUMN IF EXISTS webhook_payload;

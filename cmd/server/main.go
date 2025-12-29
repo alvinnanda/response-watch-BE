@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -11,8 +12,10 @@ import (
 	"github.com/boscod/responsewatch/config"
 	"github.com/boscod/responsewatch/internal/database"
 	"github.com/boscod/responsewatch/internal/middleware"
+	"github.com/boscod/responsewatch/internal/rabbitmq"
 	"github.com/boscod/responsewatch/internal/routes"
 	"github.com/boscod/responsewatch/internal/services"
+	workers "github.com/boscod/responsewatch/internal/worker"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/logger"
 	"github.com/gofiber/fiber/v3/middleware/recover"
@@ -63,6 +66,31 @@ func main() {
 		TimeFormat: "2006-01-02 15:04:05",
 	}))
 	app.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+
+	// Setup RabbitMQ
+	if cfg.RabbitMQURL != "" {
+		if err := rabbitmq.SetupRabbitMQ(cfg.RabbitMQURL); err != nil {
+			log.Printf("Failed to connect to RabbitMQ: %v", err)
+			// Proceed without RabbitMQ? Or fail?
+			// For this feature, maybe just log error but allow server to run (graceful degradation)
+		} else {
+			// Start Worker
+			noteService := services.NewNoteService()
+			noteWorker := workers.NewNoteWorker(noteService)
+
+			// Context for worker cancellation
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			go func() {
+				if err := noteWorker.StartWorker(ctx); err != nil {
+					log.Printf("Worker failed: %v", err)
+				}
+			}()
+
+			defer rabbitmq.Close()
+		}
+	}
 
 	// Setup routes
 	routes.SetupRoutes(app, jwtService, cryptoService, authService)

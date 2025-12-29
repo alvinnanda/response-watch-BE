@@ -71,4 +71,14 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	protected.Get("/vendor-groups/:id", vendorGroupHandler.Get)
 	protected.Put("/vendor-groups/:id", vendorGroupHandler.Update)
 	protected.Delete("/vendor-groups/:id", vendorGroupHandler.Delete)
+
+	// Note routes
+	noteService := services.NewNoteService()
+	noteHandler := handlers.NewNoteHandler(noteService)
+
+	protected.Get("/notes", noteHandler.GetNotes)
+	protected.Get("/notes/reminders", noteHandler.GetUpcomingReminders)
+	protected.Post("/notes", noteHandler.CreateNote)
+	protected.Put("/notes/:id", noteHandler.UpdateNote)
+	protected.Delete("/notes/:id", noteHandler.DeleteNote)
 }
