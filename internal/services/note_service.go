@@ -49,6 +49,7 @@ func (s *NoteService) CreateOrUpdateNote(ctx context.Context, note *models.Note)
 		Set("reminder_channel = EXCLUDED.reminder_channel").
 		Set("webhook_url = EXCLUDED.webhook_url").
 		Set("webhook_payload = EXCLUDED.webhook_payload").
+		Set("whatsapp_phone = EXCLUDED.whatsapp_phone").
 		Set("background_color = EXCLUDED.background_color").
 		Set("tagline = EXCLUDED.tagline").
 		Set("request_uuid = EXCLUDED.request_uuid").
@@ -90,7 +91,8 @@ func (s *NoteService) GetNoteByID(ctx context.Context, id uuid.UUID) (*models.No
 	note := new(models.Note)
 	err := database.DB.NewSelect().
 		Model(note).
-		Where("id = ?", id).
+		Relation("User").
+		Where("n.id = ?", id).
 		Scan(ctx)
 	if err != nil {
 		return nil, err

@@ -59,6 +59,10 @@ type Request struct {
 	// Soft delete
 	DeletedAt *time.Time `bun:"deleted_at,soft_delete" json:"-"`
 
+	// Description security
+	IsDescriptionSecure bool    `bun:"is_description_secure,default:false" json:"is_description_secure"`
+	DescriptionPINHash  *string `bun:"description_pin_hash" json:"-"` // Never expose hash to client
+
 	// Joined fields
 	PICIsPublic *bool `bun:"pic_is_public,scanonly" json:"pic_is_public,omitempty"`
 }
@@ -90,6 +94,7 @@ type RequestResponse struct {
 	DurationSeconds     *int     `json:"duration_seconds,omitempty"`
 	ResponseTimeSeconds *int     `json:"response_time_seconds,omitempty"`
 	PICIsPublic         *bool    `json:"pic_is_public,omitempty"`
+	IsDescriptionSecure bool     `json:"is_description_secure"`
 }
 
 func (r *Request) ToResponse() *RequestResponse {
@@ -110,6 +115,7 @@ func (r *Request) ToResponse() *RequestResponse {
 		DurationSeconds:     r.DurationSeconds,
 		ResponseTimeSeconds: r.ResponseTimeSeconds,
 		PICIsPublic:         r.PICIsPublic,
+		IsDescriptionSecure: r.IsDescriptionSecure,
 	}
 
 	if r.StartedAt != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,12 +19,16 @@ import (
 )
 
 type NoteWorker struct {
-	noteService *services.NoteService
+	noteService     *services.NoteService
+	emailService    *services.EmailService
+	whatsappService *services.WhatsAppService
 }
 
-func NewNoteWorker(ns *services.NoteService) *NoteWorker {
+func NewNoteWorker(ns *services.NoteService, es *services.EmailService, ws *services.WhatsAppService) *NoteWorker {
 	return &NoteWorker{
-		noteService: ns,
+		noteService:     ns,
+		emailService:    es,
+		whatsappService: ws,
 	}
 }
 
@@ -139,7 +144,57 @@ func (w *NoteWorker) sendNotification(note *models.Note) {
 	case models.ReminderChannelWebhook:
 		w.sendWebhook(note)
 	case models.ReminderChannelEmail:
-		fmt.Printf(" >>> [EMAIL SENT] To User %d: %s\n", note.UserID, msg)
+		if note.User == nil || note.User.Email == "" {
+			log.Printf(" [!] Cannot send email: User email not found for note %s", note.ID)
+			// Still ack? Yes, otherwise it loops forever.
+			return
+		}
+
+		subject := fmt.Sprintf("Reminder: %s", note.Title)
+		// Basic HTML Template
+		body := fmt.Sprintf(`<h2 style="margin-top: 0; color: #111827;">%s</h2>
+<p style="margin-bottom: 24px; line-height: 1.6;">%s</p>`, note.Title, note.Content)
+
+		if note.Tagline != "" {
+			body += fmt.Sprintf(`<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-style: italic; font-size: 14px;">%s</p>`, note.Tagline)
+		}
+
+		err := w.emailService.SendEmail([]string{note.User.Email}, subject, body)
+		if err != nil {
+			log.Printf(" [!] Failed to send email to %s: %v", note.User.Email, err)
+		} else {
+			fmt.Printf(" >>> [EMAIL SENT] To %s: %s\n", note.User.Email, note.Title)
+		}
+	case models.ReminderChannelWhatsApp:
+		if note.WhatsAppPhone == nil || *note.WhatsAppPhone == "" {
+			log.Printf(" [!] Cannot send WhatsApp: Phone number not set for note %s", note.ID)
+			return
+		}
+
+		// Helper regex to strip HTML tags
+		re := regexp.MustCompile(`<[^>]*>`)
+		cleanContent := re.ReplaceAllString(note.Content, "")
+		cleanContent = strings.TrimSpace(cleanContent)
+
+		// Format message for WhatsApp
+		waMessage := fmt.Sprintf("*%s*\n\n%s", note.Title, cleanContent)
+		if note.Tagline != "" {
+			waMessage += fmt.Sprintf("\n\n_%s_", note.Tagline)
+		}
+
+		// Add footer with organization if available
+		if note.User != nil && note.User.Organization != nil && *note.User.Organization != "" {
+			waMessage += fmt.Sprintf("\n\n— %s via ResponseWatch", *note.User.Organization)
+		} else {
+			waMessage += "\n\n— ResponseWatch Reminder"
+		}
+
+		err := w.whatsappService.SendMessage(*note.WhatsAppPhone, waMessage)
+		if err != nil {
+			log.Printf(" [!] Failed to send WhatsApp to %s: %v", *note.WhatsAppPhone, err)
+		} else {
+			fmt.Printf(" >>> [WHATSAPP SENT] To %s: %s\n", *note.WhatsAppPhone, note.Title)
+		}
 	default:
 		fmt.Printf(" >>> [DEFAULT NOTIF] %s\n", msg)
 	}

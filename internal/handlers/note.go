@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/boscod/responsewatch/internal/database"
 	"github.com/boscod/responsewatch/internal/middleware"
 	"github.com/boscod/responsewatch/internal/models"
 	"github.com/boscod/responsewatch/internal/services"
@@ -33,6 +35,7 @@ func (h *NoteHandler) CreateNote(c fiber.Ctx) error {
 		ReminderChannel models.ReminderChannel `json:"reminder_channel"`
 		WebhookURL      *string                `json:"webhook_url"`
 		WebhookPayload  *string                `json:"webhook_payload"`
+		WhatsAppPhone   *string                `json:"whatsapp_phone"`
 		BackgroundColor string                 `json:"background_color"`
 		Tagline         string                 `json:"tagline"`
 		RequestUUID     *uuid.UUID             `json:"request_uuid"`
@@ -49,6 +52,49 @@ func (h *NoteHandler) CreateNote(c fiber.Ctx) error {
 		}
 	}
 
+	// Validation: WhatsApp phone required if channel is whatsapp
+	if req.IsReminder && req.ReminderChannel == models.ReminderChannelWhatsApp {
+		if req.WhatsAppPhone == nil || *req.WhatsAppPhone == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "WhatsApp phone number is required when choosing WhatsApp channel"})
+		}
+	}
+
+	// Get user plan and check feature permissions
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("id = ?", userID).
+		Scan(c.Context())
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch user"})
+	}
+
+	limits := models.GetPlanLimits(user.Plan)
+
+	// Check reminder permission
+	if req.IsReminder && !limits.Reminder {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":   "Feature not available",
+			"message": "Reminders are only available on Pro and Enterprise plans",
+		})
+	}
+
+	// If note is attached to a request, check notes per request limit
+	if req.RequestUUID != nil && limits.NotesPerRequest > 0 {
+		notesCount, _ := database.DB.NewSelect().
+			Model((*models.Note)(nil)).
+			Where("request_uuid = ?", req.RequestUUID).
+			Where("user_id = ?", userID).
+			Count(c.Context())
+
+		if notesCount >= limits.NotesPerRequest {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error":   "Notes limit exceeded",
+				"message": fmt.Sprintf("Your %s plan allows %d notes per request. Upgrade for more.", user.Plan, limits.NotesPerRequest),
+			})
+		}
+	}
+
 	note := &models.Note{
 		UserID:          userID,
 		Title:           req.Title,
@@ -57,6 +103,7 @@ func (h *NoteHandler) CreateNote(c fiber.Ctx) error {
 		ReminderChannel: req.ReminderChannel,
 		WebhookURL:      req.WebhookURL,
 		WebhookPayload:  req.WebhookPayload,
+		WhatsAppPhone:   req.WhatsAppPhone,
 		BackgroundColor: req.BackgroundColor,
 		Tagline:         req.Tagline,
 		RequestUUID:     req.RequestUUID,
@@ -94,6 +141,7 @@ func (h *NoteHandler) UpdateNote(c fiber.Ctx) error {
 		ReminderChannel models.ReminderChannel `json:"reminder_channel"`
 		WebhookURL      *string                `json:"webhook_url"`
 		WebhookPayload  *string                `json:"webhook_payload"`
+		WhatsAppPhone   *string                `json:"whatsapp_phone"`
 		BackgroundColor string                 `json:"background_color"`
 		Tagline         string                 `json:"tagline"`
 		RequestUUID     *uuid.UUID             `json:"request_uuid"`
@@ -107,6 +155,13 @@ func (h *NoteHandler) UpdateNote(c fiber.Ctx) error {
 	if req.IsReminder && req.ReminderChannel == models.ReminderChannelWebhook {
 		if req.WebhookURL == nil || *req.WebhookURL == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Webhook URL is required when choosing Webhook channel"})
+		}
+	}
+
+	// Validation: WhatsApp phone required if channel is whatsapp
+	if req.IsReminder && req.ReminderChannel == models.ReminderChannelWhatsApp {
+		if req.WhatsAppPhone == nil || *req.WhatsAppPhone == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "WhatsApp phone number is required when choosing WhatsApp channel"})
 		}
 	}
 
@@ -126,6 +181,7 @@ func (h *NoteHandler) UpdateNote(c fiber.Ctx) error {
 	existing.ReminderChannel = req.ReminderChannel
 	existing.WebhookURL = req.WebhookURL
 	existing.WebhookPayload = req.WebhookPayload
+	existing.WhatsAppPhone = req.WhatsAppPhone
 	existing.BackgroundColor = req.BackgroundColor
 	existing.Tagline = req.Tagline
 	existing.RequestUUID = req.RequestUUID

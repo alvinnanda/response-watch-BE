@@ -39,6 +39,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	public.Get("/t/:token", requestHandler.GetByToken)
 	public.Post("/t/:token/start", requestHandler.StartResponse)
 	public.Post("/t/:token/finish", requestHandler.FinishResponse)
+	public.Post("/t/:token/verify-pin", requestHandler.VerifyDescriptionPIN)
 	public.Post("/requests", requestHandler.CreatePublic)
 	public.Post("/requests/:username", requestHandler.CreatePublicForUser)
 

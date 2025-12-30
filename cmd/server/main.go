@@ -76,7 +76,9 @@ func main() {
 		} else {
 			// Start Worker
 			noteService := services.NewNoteService()
-			noteWorker := workers.NewNoteWorker(noteService)
+			emailService := services.NewEmailService()
+			whatsappService := services.NewWhatsAppService()
+			noteWorker := workers.NewNoteWorker(noteService, emailService, whatsappService)
 
 			// Context for worker cancellation
 			ctx, cancel := context.WithCancel(context.Background())

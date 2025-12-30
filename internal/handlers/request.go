@@ -29,10 +29,12 @@ func NewRequestHandler(cryptoService *services.CryptoService) *RequestHandler {
 
 // CreateRequestPayload represents the create request payload
 type CreateRequestPayload struct {
-	Title           string   `json:"title"`
-	Description     *string  `json:"description,omitempty"`
-	FollowupLink    *string  `json:"followup_link,omitempty"`
-	EmbeddedPICList []string `json:"embedded_pic_list,omitempty"`
+	Title               string   `json:"title"`
+	Description         *string  `json:"description,omitempty"`
+	FollowupLink        *string  `json:"followup_link,omitempty"`
+	EmbeddedPICList     []string `json:"embedded_pic_list,omitempty"`
+	IsDescriptionSecure bool     `json:"is_description_secure"`
+	DescriptionPIN      *string  `json:"description_pin,omitempty"`
 }
 
 // Create handles creating a new request
@@ -41,6 +43,46 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 	if userID == 0 {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"error": "Unauthorized",
+		})
+	}
+
+	ctx := context.Background()
+
+	// Get user and check plan limits
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("id = ?", userID).
+		Scan(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch user",
+		})
+	}
+
+	// Check and auto-downgrade if subscription expired
+	wasDowngraded := user.CheckAndDowngrade()
+
+	// Check if monthly reset needed (automatic monthly reset)
+	if time.Now().After(user.RequestCountResetAt) {
+		user.MonthlyRequestCount = 0
+		user.RequestCountResetAt = time.Now().AddDate(0, 1, 0) // Next month
+		wasDowngraded = true                                   // Force update
+	}
+
+	// Save user if plan changed or monthly reset occurred
+	if wasDowngraded {
+		database.DB.NewUpdate().Model(user).WherePK().Exec(ctx)
+	}
+
+	// Check plan limits
+	limits := models.GetPlanLimits(user.Plan)
+	if limits.MonthlyRequests > 0 && user.MonthlyRequestCount >= limits.MonthlyRequests {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error":        "Monthly limit exceeded",
+			"message":      fmt.Sprintf("You've reached your %s plan limit (%d requests/month). Upgrade to continue.", user.Plan, limits.MonthlyRequests),
+			"current_plan": user.Plan,
 		})
 	}
 
@@ -56,6 +98,14 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error":   "Bad Request",
 			"message": "Title is required",
+		})
+	}
+
+	// Check secure description permission
+	if payload.IsDescriptionSecure && !limits.SecureDesc {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error":   "Feature not available",
+			"message": "Secure description is only available on Pro and Enterprise plans",
 		})
 	}
 
@@ -85,7 +135,6 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 	}
 
 	// Generate URL token with retry logic for collision handling
-	ctx := context.Background()
 	var urlToken string
 	const maxRetries = 3
 
@@ -115,6 +164,14 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		picList = []string{}
 	}
 
+	// Hash PIN if secure description is enabled
+	var pinHash *string
+	if payload.IsDescriptionSecure && payload.DescriptionPIN != nil && *payload.DescriptionPIN != "" {
+		hash := sha256.Sum256([]byte(*payload.DescriptionPIN))
+		hashStr := hex.EncodeToString(hash[:])
+		pinHash = &hashStr
+	}
+
 	request := &models.Request{
 		UserID:                &userID,
 		URLToken:              urlToken,
@@ -123,6 +180,8 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		FollowupLinkEncrypted: followupEncrypted,
 		Status:                models.StatusWaiting,
 		EmbeddedPICList:       picList,
+		IsDescriptionSecure:   payload.IsDescriptionSecure,
+		DescriptionPINHash:    pinHash,
 	}
 
 	_, err = database.DB.NewInsert().Model(request).Exec(ctx)
@@ -137,6 +196,10 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 	request.Title = payload.Title
 	request.Description = payload.Description
 	request.FollowupLink = payload.FollowupLink
+
+	// Increment request count
+	user.MonthlyRequestCount++
+	database.DB.NewUpdate().Model(user).WherePK().Exec(ctx)
 
 	return c.Status(fiber.StatusCreated).JSON(request.ToResponse())
 }
@@ -516,6 +579,22 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 	search := c.Query("search")
 
 	ctx := context.Background()
+
+	// Get user plan for history limits
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("id = ?", userID).
+		Scan(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch user",
+		})
+	}
+
+	limits := models.GetPlanLimits(user.Plan)
+
 	var requests []models.Request
 
 	// Build query
@@ -524,6 +603,12 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 		Where("user_id = ?", userID).
 		Where("deleted_at IS NULL").
 		Order("created_at DESC")
+
+	// Apply history retention based on plan
+	if limits.HistoryDays > 0 {
+		cutoffDate := time.Now().AddDate(0, 0, -limits.HistoryDays)
+		query = query.Where("created_at >= ?", cutoffDate)
+	}
 
 	// Apply filters
 	if status != "" {
@@ -831,8 +916,12 @@ func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 
 	// Decrypt
 	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
-	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
 	request.FollowupLink, _ = h.cryptoService.DecryptPtr(request.FollowupLinkEncrypted)
+
+	// If description is secured, don't expose it until PIN is verified
+	if !request.IsDescriptionSecure {
+		request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+	}
 
 	return c.JSON(request.ToResponse())
 }
@@ -1238,6 +1327,75 @@ func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"requests": responses,
+	})
+}
+
+// VerifyDescriptionPINPayload for PIN verification
+type VerifyDescriptionPINPayload struct {
+	PIN string `json:"pin"`
+}
+
+// VerifyDescriptionPIN handles verifying PIN for secured descriptions
+func (h *RequestHandler) VerifyDescriptionPIN(c fiber.Ctx) error {
+	token := c.Params("token")
+
+	var payload VerifyDescriptionPINPayload
+	if err := c.Bind().JSON(&payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Invalid request body",
+		})
+	}
+
+	if payload.PIN == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "PIN is required",
+		})
+	}
+
+	ctx := context.Background()
+	request := new(models.Request)
+
+	err := database.DB.NewSelect().
+		Model(request).
+		Where("url_token = ?", token).
+		Where("deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "Request not found",
+		})
+	}
+
+	// Check if description is secured
+	if !request.IsDescriptionSecure || request.DescriptionPINHash == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "This request does not have a secured description",
+		})
+	}
+
+	// Hash the input PIN and compare
+	hash := sha256.Sum256([]byte(payload.PIN))
+	inputPINHash := hex.EncodeToString(hash[:])
+
+	if inputPINHash != *request.DescriptionPINHash {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"success": false,
+			"error":   "Invalid PIN",
+			"message": "PIN salah. Silakan coba lagi.",
+		})
+	}
+
+	// Decrypt and return description
+	description, _ := h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+
+	return c.JSON(fiber.Map{
+		"success":     true,
+		"description": description,
 	})
 }
 
