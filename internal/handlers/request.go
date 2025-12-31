@@ -1217,12 +1217,19 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	// Only fetch necessary fields for Kanban/Monitoring
 	var requests []models.Request
 
-	// Base query
+	// Check if user's profile is public
+	if !user.IsPublic {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "User not found",
+		})
+	}
+
+	// Base query - is_public is at user level, not request level
 	query := database.DB.NewSelect().
 		Model(&requests).
 		Where("user_id = ?", user.ID).
-		Where("deleted_at IS NULL").
-		Where("is_public = true")
+		Where("deleted_at IS NULL")
 
 	// Filter by date range if provided, otherwise default to "today" (last 24h) or specific logic?
 	// For public monitoring, usually we show active stuff or recent stuff.
@@ -1242,8 +1249,28 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 		query = query.Where("created_at <= ?::date + INTERVAL '1 day'", endDate)
 	}
 
-	// Order by latest
-	err = query.Order("created_at DESC").Limit(50).Scan(ctx)
+	// Parse pagination params
+	page := 1
+	limit := 60
+	if p, err := strconv.Atoi(c.Query("page", "1")); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(c.Query("limit", "60")); err == nil && l > 0 && l <= 100 {
+		limit = l
+	}
+	offset := (page - 1) * limit
+
+	// Get total count first
+	total, err := query.Count(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to count requests",
+		})
+	}
+
+	// Order by latest and apply pagination
+	err = query.Order("created_at DESC").Limit(limit).Offset(offset).Scan(ctx)
 
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -1266,9 +1293,25 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 		responses[i] = requests[i].ToResponse()
 	}
 
+	// Calculate total pages
+	totalPages := total / limit
+	if total%limit != 0 {
+		totalPages++
+	}
+
 	return c.JSON(fiber.Map{
-		"username": user.Username,
 		"requests": responses,
+		"pagination": fiber.Map{
+			"page":        page,
+			"limit":       limit,
+			"total":       total,
+			"total_pages": totalPages,
+		},
+		"user": fiber.Map{
+			"username":     user.Username,
+			"full_name":    user.FullName,
+			"organization": user.Organization,
+		},
 	})
 }
 
