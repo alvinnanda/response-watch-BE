@@ -59,10 +59,11 @@ func attemptConnect(cfg *config.Config) (*bun.DB, error) {
 	// Create SQL DB connection
 	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(cfg.DatabaseURL)))
 
-	// Configure connection pool
-	sqldb.SetMaxOpenConns(25)
-	sqldb.SetMaxIdleConns(5)
+	// Configure connection pool - optimized for Supabase
+	sqldb.SetMaxOpenConns(10) // Reduced for Supabase compatibility (free tier: 10-20 connections)
+	sqldb.SetMaxIdleConns(10) // Match max open for better connection reuse
 	sqldb.SetConnMaxLifetime(5 * time.Minute)
+	sqldb.SetConnMaxIdleTime(3 * time.Minute) // Recycle idle connections to prevent stacking
 
 	// Create Bun DB instance
 	db := bun.NewDB(sqldb, pgdialect.New())
