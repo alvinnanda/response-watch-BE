@@ -78,7 +78,8 @@ func main() {
 			noteService := services.NewNoteService()
 			emailService := services.NewEmailService()
 			whatsappService := services.NewWhatsAppService()
-			noteWorker := workers.NewNoteWorker(noteService, emailService, whatsappService)
+			notificationService := services.NewNotificationService(emailService)
+			noteWorker := workers.NewNoteWorker(noteService, emailService, whatsappService, notificationService)
 
 			// Context for worker cancellation
 			ctx, cancel := context.WithCancel(context.Background())

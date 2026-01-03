@@ -8,10 +8,15 @@ import (
 )
 
 func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService *services.CryptoService, authService *services.AuthService) {
+	// Initialize services
+	emailService := services.NewEmailService()
+	notificationService := services.NewNotificationService(emailService)
+
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, jwtService)
-	requestHandler := handlers.NewRequestHandler(cryptoService)
+	requestHandler := handlers.NewRequestHandler(cryptoService, notificationService)
 	vendorGroupHandler := handlers.NewVendorGroupHandler()
+	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
 	// API group
 	api := app.Group("/api")
@@ -72,6 +77,12 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	protected.Get("/vendor-groups/:id", vendorGroupHandler.Get)
 	protected.Put("/vendor-groups/:id", vendorGroupHandler.Update)
 	protected.Delete("/vendor-groups/:id", vendorGroupHandler.Delete)
+
+	// Notification routes
+	protected.Get("/notifications", notificationHandler.List)
+	protected.Get("/notifications/unread-count", notificationHandler.UnreadCount)
+	protected.Post("/notifications/:id/read", notificationHandler.MarkAsRead)
+	protected.Post("/notifications/read-all", notificationHandler.MarkAllAsRead)
 
 	// Note routes
 	noteService := services.NewNoteService()

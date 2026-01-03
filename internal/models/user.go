@@ -30,6 +30,9 @@ type User struct {
 	MonthlyRequestCount   int        `bun:"monthly_request_count,default:0" json:"-"`
 	RequestCountResetAt   time.Time  `bun:"request_count_reset_at,default:now()" json:"-"`
 	SubscriptionExpiresAt *time.Time `bun:"subscription_expires_at" json:"-"`
+
+	// Notification Preferences
+	NotifyEmail bool `bun:"notify_email,default:false" json:"notify_email"`
 }
 
 // UserResponse is the safe representation for API responses
@@ -44,6 +47,7 @@ type UserResponse struct {
 	EmailVerified bool    `json:"email_verified"`
 	Role          string  `json:"role"` // For frontend compatibility
 	Plan          string  `json:"plan"`
+	NotifyEmail   bool    `json:"notify_email"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 }
@@ -60,6 +64,7 @@ func (u *User) ToResponse() *UserResponse {
 		EmailVerified: u.EmailVerified,
 		Role:          "user", // Default role
 		Plan:          u.Plan,
+		NotifyEmail:   u.NotifyEmail,
 		CreatedAt:     u.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:     u.UpdatedAt.Format(time.RFC3339),
 	}

@@ -119,7 +119,7 @@ func (a *AuthService) ValidateToken(token string) (*JWTClaims, error) {
 }
 
 // UpdateProfile updates user profile fields
-func (a *AuthService) UpdateProfile(ctx context.Context, userID int64, username, fullName, organization *string, isPublic *bool) (*models.User, error) {
+func (a *AuthService) UpdateProfile(ctx context.Context, userID int64, username, fullName, organization *string, isPublic, notifyEmail *bool) (*models.User, error) {
 	updateQuery := database.DB.NewUpdate().Model((*models.User)(nil)).Where("id = ?", userID)
 
 	if username != nil {
@@ -133,6 +133,9 @@ func (a *AuthService) UpdateProfile(ctx context.Context, userID int64, username,
 	}
 	if isPublic != nil {
 		updateQuery = updateQuery.Set("is_public = ?", *isPublic)
+	}
+	if notifyEmail != nil {
+		updateQuery = updateQuery.Set("notify_email = ?", *notifyEmail)
 	}
 
 	_, err := updateQuery.Exec(ctx)

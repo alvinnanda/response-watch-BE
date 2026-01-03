@@ -18,12 +18,14 @@ import (
 )
 
 type RequestHandler struct {
-	cryptoService *services.CryptoService
+	cryptoService       *services.CryptoService
+	notificationService *services.NotificationService
 }
 
-func NewRequestHandler(cryptoService *services.CryptoService) *RequestHandler {
+func NewRequestHandler(cryptoService *services.CryptoService, notificationService *services.NotificationService) *RequestHandler {
 	return &RequestHandler{
-		cryptoService: cryptoService,
+		cryptoService:       cryptoService,
+		notificationService: notificationService,
 	}
 }
 
@@ -992,6 +994,11 @@ func (h *RequestHandler) StartResponse(c fiber.Ctx) error {
 	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
 	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
 
+	// Trigger notification for status change
+	if h.notificationService != nil {
+		go h.notificationService.NotifyStatusChange(request, request.Title, models.StatusWaiting, models.StatusInProgress)
+	}
+
 	return c.JSON(request.ToResponse())
 }
 
@@ -1067,6 +1074,11 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 	database.DB.NewSelect().Model(request).Where("id = ?", request.ID).Scan(ctx)
 	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
 	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+
+	// Trigger notification for status change
+	if h.notificationService != nil {
+		go h.notificationService.NotifyStatusChange(request, request.Title, models.StatusInProgress, models.StatusDone)
+	}
 
 	return c.JSON(request.ToResponse())
 }

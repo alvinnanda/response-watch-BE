@@ -19,16 +19,18 @@ import (
 )
 
 type NoteWorker struct {
-	noteService     *services.NoteService
-	emailService    *services.EmailService
-	whatsappService *services.WhatsAppService
+	noteService         *services.NoteService
+	emailService        *services.EmailService
+	whatsappService     *services.WhatsAppService
+	notificationService *services.NotificationService
 }
 
-func NewNoteWorker(ns *services.NoteService, es *services.EmailService, ws *services.WhatsAppService) *NoteWorker {
+func NewNoteWorker(ns *services.NoteService, es *services.EmailService, ws *services.WhatsAppService, notifService *services.NotificationService) *NoteWorker {
 	return &NoteWorker{
-		noteService:     ns,
-		emailService:    es,
-		whatsappService: ws,
+		noteService:         ns,
+		emailService:        es,
+		whatsappService:     ws,
+		notificationService: notifService,
 	}
 }
 
@@ -139,14 +141,22 @@ func (w *NoteWorker) processMessage(ctx context.Context, d amqp.Delivery) {
 
 func (w *NoteWorker) sendNotification(note *models.Note) {
 	msg := fmt.Sprintf("REMINDER for Note '%s': %s", note.Title, note.Content)
+	noteIDStr := note.ID.String()
+
+	// Helper to send in-app notification
+	sendInAppNotif := func(channel, status, errorMsg string) {
+		if w.notificationService != nil && note.User != nil {
+			w.notificationService.NotifyReminder(note.User.ID, noteIDStr, note.Title, channel, status, errorMsg)
+		}
+	}
 
 	switch note.ReminderChannel {
 	case models.ReminderChannelWebhook:
-		w.sendWebhook(note)
+		w.sendWebhook(note, sendInAppNotif)
 	case models.ReminderChannelEmail:
 		if note.User == nil || note.User.Email == "" {
 			log.Printf(" [!] Cannot send email: User email not found for note %s", note.ID)
-			// Still ack? Yes, otherwise it loops forever.
+			sendInAppNotif("email", "failed", "Email tidak ditemukan")
 			return
 		}
 
@@ -162,12 +172,15 @@ func (w *NoteWorker) sendNotification(note *models.Note) {
 		err := w.emailService.SendEmail([]string{note.User.Email}, subject, body)
 		if err != nil {
 			log.Printf(" [!] Failed to send email to %s: %v", note.User.Email, err)
+			sendInAppNotif("email", "failed", err.Error())
 		} else {
 			fmt.Printf(" >>> [EMAIL SENT] To %s: %s\n", note.User.Email, note.Title)
+			sendInAppNotif("email", "sent", "")
 		}
 	case models.ReminderChannelWhatsApp:
 		if note.WhatsAppPhone == nil || *note.WhatsAppPhone == "" {
 			log.Printf(" [!] Cannot send WhatsApp: Phone number not set for note %s", note.ID)
+			sendInAppNotif("whatsapp", "failed", "Nomor WhatsApp tidak diset")
 			return
 		}
 
@@ -192,17 +205,21 @@ func (w *NoteWorker) sendNotification(note *models.Note) {
 		err := w.whatsappService.SendMessage(*note.WhatsAppPhone, waMessage)
 		if err != nil {
 			log.Printf(" [!] Failed to send WhatsApp to %s: %v", *note.WhatsAppPhone, err)
+			sendInAppNotif("whatsapp", "failed", err.Error())
 		} else {
 			fmt.Printf(" >>> [WHATSAPP SENT] To %s: %s\n", *note.WhatsAppPhone, note.Title)
+			sendInAppNotif("whatsapp", "sent", "")
 		}
 	default:
 		fmt.Printf(" >>> [DEFAULT NOTIF] %s\n", msg)
+		sendInAppNotif("default", "sent", "")
 	}
 }
 
-func (w *NoteWorker) sendWebhook(note *models.Note) {
+func (w *NoteWorker) sendWebhook(note *models.Note, notifCallback func(channel, status, errorMsg string)) {
 	if note.WebhookURL == nil || *note.WebhookURL == "" {
 		log.Printf(" [!] Webhook URL is empty for note %s", note.ID)
+		notifCallback("webhook", "failed", "Webhook URL tidak diset")
 		return
 	}
 
@@ -233,6 +250,7 @@ func (w *NoteWorker) sendWebhook(note *models.Note) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
 	if err != nil {
 		log.Printf(" [!] Failed to create webhook request: %v", err)
+		notifCallback("webhook", "failed", err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -242,13 +260,16 @@ func (w *NoteWorker) sendWebhook(note *models.Note) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf(" [!] Webhook request failed: %v", err)
+		notifCallback("webhook", "failed", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		fmt.Printf(" >>> [WEBHOOK SUCCEEDED] %s (Status: %d)\n", url, resp.StatusCode)
+		notifCallback("webhook", "sent", "")
 	} else {
 		log.Printf(" [!] Webhook failed with status: %d", resp.StatusCode)
+		notifCallback("webhook", "failed", fmt.Sprintf("HTTP Status: %d", resp.StatusCode))
 	}
 }
