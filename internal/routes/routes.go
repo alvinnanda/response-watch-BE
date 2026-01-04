@@ -63,6 +63,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 
 	// Request routes
 	protected.Get("/requests/stats", requestHandler.Stats)
+	protected.Get("/requests/stats/premium", requestHandler.StatsPremium) // Add premium stats route
 	// Add dedicated monitoring endpoint for dashboard
 	protected.Get("/requests/monitoring", requestHandler.GetDashboardMonitoringRequests)
 	protected.Get("/requests", requestHandler.List)
@@ -70,6 +71,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	protected.Get("/requests/:id", requestHandler.Get)
 	protected.Put("/requests/:id", requestHandler.Update)
 	protected.Delete("/requests/:id", requestHandler.Delete)
+	protected.Put("/requests/:id/reopen", requestHandler.ReopenRequest)
 
 	// Vendor Group routes
 	protected.Get("/vendor-groups", vendorGroupHandler.List)

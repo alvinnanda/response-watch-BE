@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/boscod/responsewatch/internal/models"
 	"github.com/boscod/responsewatch/internal/services"
 	"github.com/gofiber/fiber/v3"
+	"github.com/uptrace/bun"
 )
 
 type RequestHandler struct {
@@ -37,6 +39,8 @@ type CreateRequestPayload struct {
 	EmbeddedPICList     []string `json:"embedded_pic_list,omitempty"`
 	IsDescriptionSecure bool     `json:"is_description_secure"`
 	DescriptionPIN      *string  `json:"description_pin,omitempty"`
+	VendorGroupID       *int64   `json:"vendor_group_id,omitempty"`
+	ScheduledTime       *string  `json:"scheduled_time,omitempty"`
 }
 
 // Create handles creating a new request
@@ -111,15 +115,8 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		})
 	}
 
-	// Encrypt title and description
-	titleEncrypted, err := h.cryptoService.Encrypt(payload.Title)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Internal Server Error",
-			"message": "Failed to encrypt data",
-		})
-	}
-
+	// Title is now stored as plain text for search (no encryption)
+	// Encrypt description only
 	descEncrypted, err := h.cryptoService.EncryptPtr(payload.Description)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -174,16 +171,27 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		pinHash = &hashStr
 	}
 
+	// Parse scheduled time if present
+	var scheduledTime *time.Time
+	if payload.ScheduledTime != nil && *payload.ScheduledTime != "" {
+		t, err := time.Parse(time.RFC3339, *payload.ScheduledTime)
+		if err == nil {
+			scheduledTime = &t
+		}
+	}
+
 	request := &models.Request{
 		UserID:                &userID,
-		URLToken:              urlToken,
-		TitleEncrypted:        titleEncrypted,
+		Title:                 payload.Title, // Plain text title
 		DescriptionEncrypted:  descEncrypted,
 		FollowupLinkEncrypted: followupEncrypted,
+		VendorGroupID:         payload.VendorGroupID,
+		URLToken:              urlToken,
 		Status:                models.StatusWaiting,
 		EmbeddedPICList:       picList,
 		IsDescriptionSecure:   payload.IsDescriptionSecure,
 		DescriptionPINHash:    pinHash,
+		ScheduledTime:         scheduledTime,
 	}
 
 	_, err = database.DB.NewInsert().Model(request).Exec(ctx)
@@ -194,8 +202,7 @@ func (h *RequestHandler) Create(c fiber.Ctx) error {
 		})
 	}
 
-	// Decrypt for response
-	request.Title = payload.Title
+	// Decrypt description and followup for response (title is already plain)
 	request.Description = payload.Description
 	request.FollowupLink = payload.FollowupLink
 
@@ -579,6 +586,7 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 	search := c.Query("search")
+	vendorGroupIDStr := c.Query("vendor_group_id")
 
 	ctx := context.Background()
 
@@ -599,32 +607,38 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 
 	var requests []models.Request
 
-	// Build query
+	// Build query with vendor group relation
 	query := database.DB.NewSelect().
 		Model(&requests).
-		Where("user_id = ?", userID).
-		Where("deleted_at IS NULL").
-		Order("created_at DESC")
+		Relation("VendorGroup").
+		Where("r.user_id = ?", userID).
+		Where("r.deleted_at IS NULL").
+		Order("r.created_at DESC")
 
 	// Apply history retention based on plan
 	if limits.HistoryDays > 0 {
 		cutoffDate := time.Now().AddDate(0, 0, -limits.HistoryDays)
-		query = query.Where("created_at >= ?", cutoffDate)
+		query = query.Where("r.created_at >= ?", cutoffDate)
 	}
 
 	// Apply filters
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("r.status = ?", status)
 	}
 	if startDate != "" {
-		query = query.Where("created_at >= ?", startDate)
+		query = query.Where("r.created_at >= ?", startDate)
 	}
 	if endDate != "" {
-		query = query.Where("created_at <= ?::date + INTERVAL '1 day'", endDate)
+		query = query.Where("r.created_at <= ?::date + INTERVAL '1 day'", endDate)
 	}
 	if search != "" {
 		searchPattern := "%" + search + "%"
-		query = query.Where("(start_pic ILIKE ? OR end_pic ILIKE ?)", searchPattern, searchPattern)
+		query = query.Where("(r.title ILIKE ? OR r.start_pic ILIKE ? OR r.end_pic ILIKE ?)", searchPattern, searchPattern, searchPattern)
+	}
+	if vendorGroupIDStr != "" {
+		if vendorGroupID, err := strconv.ParseInt(vendorGroupIDStr, 10, 64); err == nil {
+			query = query.Where("r.vendor_group_id = ?", vendorGroupID)
+		}
 	}
 
 	// Get total count first
@@ -645,9 +659,12 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 		})
 	}
 
-	// Decrypt each request
+	// Decrypt/fallback for each request
 	for i := range requests {
-		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		// Title: use plain text if available, otherwise decrypt from encrypted (backward compat)
+		if requests[i].Title == "" && requests[i].TitleEncrypted != "" {
+			requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		}
 		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
 		requests[i].FollowupLink, _ = h.cryptoService.DecryptPtr(requests[i].FollowupLinkEncrypted)
 	}
@@ -674,7 +691,7 @@ func (h *RequestHandler) List(c fiber.Ctx) error {
 	})
 }
 
-// Stats returns request statistics for the current user
+// Stats returns basic request statistics for the current user
 func (h *RequestHandler) Stats(c fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	if userID == 0 {
@@ -685,20 +702,49 @@ func (h *RequestHandler) Stats(c fiber.Ctx) error {
 
 	ctx := context.Background()
 
-	// Get counts by status
+	// Parse filters (only needed for basic counts if we want them filtered, usually basic counts are filtered too)
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+	vendorGroupID, _ := strconv.Atoi(c.Query("vendor_group_id"))
+	search := c.Query("search")
+
+	// Helper to apply filters
+	applyFilters := func(q *bun.SelectQuery) *bun.SelectQuery {
+		q = q.Where("r.user_id = ?", userID).
+			Where("r.deleted_at IS NULL")
+
+		if startDate != "" {
+			q = q.Where("r.created_at >= ?::timestamp", startDate+" 00:00:00")
+		}
+		if endDate != "" {
+			q = q.Where("r.created_at <= ?::timestamp", endDate+" 23:59:59")
+		}
+		if vendorGroupID > 0 {
+			q = q.Where("r.vendor_group_id = ?", vendorGroupID)
+		}
+		if search != "" {
+			q = q.WhereGroup(" AND ", func(g *bun.SelectQuery) *bun.SelectQuery {
+				return g.Where("r.title ILIKE ?", "%"+search+"%").
+					WhereOr("r.start_pic ILIKE ?", "%"+search+"%").
+					WhereOr("r.end_pic ILIKE ?", "%"+search+"%")
+			})
+		}
+		return q
+	}
+
+	// 1. Get counts by status
 	var stats []struct {
 		Status string `bun:"status"`
 		Count  int    `bun:"count"`
 	}
 
-	err := database.DB.NewSelect().
-		TableExpr("requests").
-		Column("status").
+	q1 := database.DB.NewSelect().
+		TableExpr("requests AS r").
+		Column("r.status").
 		ColumnExpr("COUNT(*) AS count").
-		Where("user_id = ?", userID).
-		Where("deleted_at IS NULL").
-		Group("status").
-		Scan(ctx, &stats)
+		Group("r.status")
+
+	err := applyFilters(q1).Scan(ctx, &stats)
 
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -707,7 +753,7 @@ func (h *RequestHandler) Stats(c fiber.Ctx) error {
 		})
 	}
 
-	// Build response
+	total := 0
 	result := fiber.Map{
 		"waiting":     0,
 		"in_progress": 0,
@@ -715,7 +761,6 @@ func (h *RequestHandler) Stats(c fiber.Ctx) error {
 		"total":       0,
 	}
 
-	total := 0
 	for _, s := range stats {
 		result[s.Status] = s.Count
 		total += s.Count
@@ -723,6 +768,177 @@ func (h *RequestHandler) Stats(c fiber.Ctx) error {
 	result["total"] = total
 
 	return c.JSON(result)
+}
+
+// StatsPremium returns advanced request statistics for the current user
+func (h *RequestHandler) StatsPremium(c fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	// Check if user is allowed to access premium stats?
+	// For now we trust the frontend to gate it, but good practice to check logic or just serve it since they might have valid access
+	// The requirement is to save query power for free users.
+	// We can check the user plan here if we want to enforce it at API level.
+
+	ctx := context.Background()
+
+	// Parse filters
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+	vendorGroupID, _ := strconv.Atoi(c.Query("vendor_group_id"))
+	search := c.Query("search")
+
+	// Default to last 7 days if not provided
+	if startDate == "" {
+		startDate = time.Now().AddDate(0, 0, -6).Format("2006-01-02")
+	}
+	if endDate == "" {
+		endDate = time.Now().Format("2006-01-02")
+	}
+
+	// Helper to apply filters
+	applyFilters := func(q *bun.SelectQuery) *bun.SelectQuery {
+		q = q.Where("r.user_id = ?", userID).
+			Where("r.deleted_at IS NULL")
+
+		if startDate != "" {
+			q = q.Where("r.created_at >= ?::timestamp", startDate+" 00:00:00")
+		}
+		if endDate != "" {
+			q = q.Where("r.created_at <= ?::timestamp", endDate+" 23:59:59")
+		}
+		if vendorGroupID > 0 {
+			q = q.Where("r.vendor_group_id = ?", vendorGroupID)
+		}
+		if search != "" {
+			q = q.WhereGroup(" AND ", func(g *bun.SelectQuery) *bun.SelectQuery {
+				return g.Where("r.title ILIKE ?", "%"+search+"%").
+					WhereOr("r.start_pic ILIKE ?", "%"+search+"%").
+					WhereOr("r.end_pic ILIKE ?", "%"+search+"%")
+			})
+		}
+		return q
+	}
+
+	// 2. Get average times (Global) & Extra Stats
+	var timeStats struct {
+		AvgResponseMinutes   float64 `bun:"avg_response"`
+		AvgCompletionMinutes float64 `bun:"avg_completion"`
+		ScheduledCount       int     `bun:"scheduled_count"`
+		ReopenCount          int     `bun:"reopen_count"`
+	}
+
+	q2 := database.DB.NewSelect().
+		TableExpr("requests AS r").
+		ColumnExpr("COALESCE(AVG(r.response_time_seconds) / 60, 0) AS avg_response").
+		ColumnExpr("COALESCE(AVG(r.duration_seconds) / 60, 0) AS avg_completion").
+		ColumnExpr("COUNT(*) FILTER (WHERE r.status = 'waiting' AND r.scheduled_time > NOW()) AS scheduled_count").
+		ColumnExpr("COALESCE(SUM(r.reopen_count), 0) AS reopen_count")
+
+	err := applyFilters(q2).Scan(ctx, &timeStats)
+
+	// 3. Get Daily Trends with generate_series
+	var dailyStats []struct {
+		Date  string `bun:"date" json:"date"`
+		Count int    `bun:"count" json:"count"`
+	}
+
+	// Construct WHERE clause for the requests part
+	whereClause := "r.user_id = ? AND r.deleted_at IS NULL"
+	args := []interface{}{userID}
+
+	if startDate != "" {
+		whereClause += " AND r.created_at >= ?::timestamp"
+		args = append(args, startDate+" 00:00:00")
+	}
+	if endDate != "" {
+		whereClause += " AND r.created_at <= ?::timestamp"
+		args = append(args, endDate+" 23:59:59")
+	}
+	if vendorGroupID > 0 {
+		whereClause += " AND r.vendor_group_id = ?"
+		args = append(args, vendorGroupID)
+	}
+	if search != "" {
+		whereClause += " AND (r.title ILIKE ? OR r.start_pic ILIKE ? OR r.end_pic ILIKE ?)"
+		like := "%" + search + "%"
+		args = append(args, like, like, like)
+	}
+
+	rawQuery := `
+		WITH dates AS (
+			SELECT to_char(date_trunc('day', d)::date, 'YYYY-MM-DD') as date
+			FROM generate_series(
+				?::date,
+				?::date,
+				'1 day'::interval
+			) d
+		)
+		SELECT 
+			d.date,
+			COUNT(r.id) as count
+		FROM dates d
+		LEFT JOIN requests r ON to_char(r.created_at, 'YYYY-MM-DD') = d.date 
+			AND ` + whereClause + `
+		GROUP BY d.date
+		ORDER BY d.date ASC
+	`
+	// Prepend start/end date for generate_series to args
+	finalArgs := append([]interface{}{startDate, endDate}, args...)
+
+	err = database.DB.NewRaw(rawQuery, finalArgs...).Scan(ctx, &dailyStats)
+
+	// 4. Get Vendor Stats
+	var vendorStats []struct {
+		VendorName           string  `bun:"vendor_name" json:"vendor_name"`
+		Total                int     `bun:"total" json:"total"`
+		AvgResponseMinutes   float64 `bun:"avg_response" json:"avg_response_time_minutes"`
+		AvgCompletionMinutes float64 `bun:"avg_completion" json:"avg_completion_time_minutes"`
+		TotalReopen          int     `bun:"total_reopen" json:"total_reopen"`
+	}
+
+	q4 := database.DB.NewSelect().
+		TableExpr("requests AS r").
+		ColumnExpr("vg.group_name AS vendor_name").
+		ColumnExpr("COUNT(*) AS total").
+		ColumnExpr("COALESCE(AVG(r.response_time_seconds) / 60, 0) AS avg_response").
+		ColumnExpr("COALESCE(AVG(r.duration_seconds) / 60, 0) AS avg_completion").
+		ColumnExpr("COALESCE(SUM(r.reopen_count), 0) AS total_reopen").
+		Join("JOIN vendor_groups vg ON r.vendor_group_id = vg.id").
+		GroupExpr("vg.group_name").
+		OrderExpr("total DESC").
+		Limit(5)
+
+	err = applyFilters(q4).Scan(ctx, &vendorStats)
+	for i := range vendorStats {
+		if math.IsNaN(vendorStats[i].AvgResponseMinutes) {
+			vendorStats[i].AvgResponseMinutes = 0
+		}
+		if math.IsNaN(vendorStats[i].AvgCompletionMinutes) {
+			vendorStats[i].AvgCompletionMinutes = 0
+		}
+	}
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch premium stats",
+		})
+	}
+
+	// Build response
+	return c.JSON(fiber.Map{
+		"avg_response_time_minutes":   timeStats.AvgResponseMinutes,
+		"avg_completion_time_minutes": timeStats.AvgCompletionMinutes,
+		"scheduled_count":             timeStats.ScheduledCount,
+		"reopen_count":                timeStats.ReopenCount,
+		"daily_counts":                dailyStats,
+		"vendor_stats":                vendorStats,
+	})
 }
 
 // Get handles getting a single request by ID
@@ -896,6 +1112,83 @@ func (h *RequestHandler) Delete(c fiber.Ctx) error {
 	return c.Status(fiber.StatusNoContent).Send(nil)
 }
 
+// ReopenRequest handles reopening a completed request
+func (h *RequestHandler) ReopenRequest(c fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	requestID := c.Params("id")
+	ctx := context.Background()
+
+	// Fetch request and verify ownership
+	request := new(models.Request)
+	err := database.DB.NewSelect().
+		Model(request).
+		Relation("VendorGroup").
+		Where("r.id = ?", requestID).
+		Where("r.user_id = ?", userID).
+		Where("r.deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "Request not found",
+		})
+	}
+
+	// Verify status is done
+	if request.Status != models.StatusDone {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Only completed requests can be reopened",
+		})
+	}
+
+	now := time.Now()
+
+	// Update request: set status to in_progress, clear finished_at and duration
+	// Keep started_at to continue timer from original start time
+	_, err = database.DB.NewUpdate().
+		Model((*models.Request)(nil)).
+		Set("status = ?", models.StatusInProgress).
+		Set("reopened_at = ?", now).
+		Set("reopen_count = reopen_count + 1").
+		Set("finished_at = NULL").
+		Set("duration_seconds = NULL").
+		Where("id = ?", request.ID).
+		Exec(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to reopen request",
+		})
+	}
+
+	// Reload and return
+	database.DB.NewSelect().Model(request).Relation("VendorGroup").Where("id = ?", request.ID).Scan(ctx)
+
+	// Decrypt fields
+	if request.Title == "" && request.TitleEncrypted != "" {
+		request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	}
+	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+	request.FollowupLink, _ = h.cryptoService.DecryptPtr(request.FollowupLinkEncrypted)
+	request.ResolutionNotes, _ = h.cryptoService.DecryptPtr(request.ResolutionNotesEncrypted)
+
+	// Trigger notification for reopen
+	if h.notificationService != nil {
+		go h.notificationService.NotifyStatusChange(request, request.Title, models.StatusDone, models.StatusInProgress)
+	}
+
+	return c.JSON(request.ToResponse())
+}
+
 // GetByToken handles getting a request by URL token (public)
 func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 	token := c.Params("token")
@@ -916,9 +1209,13 @@ func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 		})
 	}
 
-	// Decrypt
-	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	// Decrypt - Title is now plain text, no need to decrypt
+	// Only decrypt if Title is empty and TitleEncrypted exists (backward compatibility)
+	if request.Title == "" && request.TitleEncrypted != "" {
+		request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	}
 	request.FollowupLink, _ = h.cryptoService.DecryptPtr(request.FollowupLinkEncrypted)
+	request.ResolutionNotes, _ = h.cryptoService.DecryptPtr(request.ResolutionNotesEncrypted)
 
 	// If description is secured, don't expose it until PIN is verified
 	if !request.IsDescriptionSecure {
@@ -963,6 +1260,16 @@ func (h *RequestHandler) StartResponse(c fiber.Ctx) error {
 		})
 	}
 
+	// Check if request is scheduled and time hasn't arrived yet
+	if request.ScheduledTime != nil && time.Now().Before(*request.ScheduledTime) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Request is scheduled",
+			"message": fmt.Sprintf("Request ini dijadwalkan untuk %s. Tombol akan aktif pada jam tersebut",
+				request.ScheduledTime.Format("2 Jan 2006, 15:04")),
+			"scheduled_time": request.ScheduledTime.Format(time.RFC3339),
+		})
+	}
+
 	now := time.Now()
 	clientIP := c.IP()
 	userAgent := c.Get("User-Agent")
@@ -1004,7 +1311,9 @@ func (h *RequestHandler) StartResponse(c fiber.Ctx) error {
 
 // FinishResponsePayload for finishing response
 type FinishResponsePayload struct {
-	PICName string `json:"pic_name,omitempty"`
+	PICName               string  `json:"pic_name,omitempty"`
+	CheckboxIssueMismatch bool    `json:"checkbox_issue_mismatch"`
+	ResolutionNotes       *string `json:"resolution_notes,omitempty"`
 }
 
 // FinishResponse handles the vendor finishing response
@@ -1052,6 +1361,19 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 		endPIC = *request.StartPIC
 	}
 
+	// Encrypt resolution notes if provided
+	var resolutionNotesEncrypted *string
+	if payload.ResolutionNotes != nil && *payload.ResolutionNotes != "" {
+		encrypted, err := h.cryptoService.EncryptPtr(payload.ResolutionNotes)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":   "Internal Server Error",
+				"message": "Failed to encrypt resolution notes",
+			})
+		}
+		resolutionNotesEncrypted = encrypted
+	}
+
 	// Update request
 	_, err = database.DB.NewUpdate().
 		Model((*models.Request)(nil)).
@@ -1060,6 +1382,8 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 		Set("end_ip = ?", clientIP).
 		Set("end_pic = ?", endPIC).
 		Set("duration_seconds = ?", durationSeconds).
+		Set("checkbox_issue_mismatch = ?", payload.CheckboxIssueMismatch).
+		Set("resolution_notes = ?", resolutionNotesEncrypted).
 		Where("id = ?", request.ID).
 		Exec(ctx)
 
@@ -1074,6 +1398,7 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 	database.DB.NewSelect().Model(request).Where("id = ?", request.ID).Scan(ctx)
 	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
 	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+	request.ResolutionNotes, _ = h.cryptoService.DecryptPtr(request.ResolutionNotesEncrypted)
 
 	// Trigger notification for status change
 	if h.notificationService != nil {
@@ -1295,9 +1620,10 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	// Let's decrypt both for now as it's "Public" monitoring.
 	// NOTE: If privacy is a concern, we might mask some data.
 	for i := range requests {
-		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
-		// Not decrypting description for public monitoring list to save bandwidth/security?
-		// User requirement said "Public Request Tracking", usually needs Title.
+		// Title: use plain text if available, otherwise decrypt (backward compat)
+		if requests[i].Title == "" && requests[i].TitleEncrypted != "" {
+			requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		}
 	}
 
 	responses := make([]*models.RequestResponse, len(requests))
@@ -1368,10 +1694,11 @@ func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
 		})
 	}
 
-	// Decrypt
+	// Decrypt/fallback for title
 	for i := range requests {
-		requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
-		// Decrypt other fields if necessary for dashboard cards
+		if requests[i].Title == "" && requests[i].TitleEncrypted != "" {
+			requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		}
 		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
 	}
 
