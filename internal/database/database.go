@@ -60,8 +60,8 @@ func attemptConnect(cfg *config.Config) (*bun.DB, error) {
 	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(cfg.DatabaseURL)))
 
 	// Configure connection pool - optimized for low memory
-	sqldb.SetMaxOpenConns(8) // Reduced from 10 for RAM optimization
-	sqldb.SetMaxIdleConns(3) // Reduced from 10 for RAM optimization
+	sqldb.SetMaxOpenConns(4) // Reduced from 10 for RAM optimization
+	sqldb.SetMaxIdleConns(2) // Reduced from 10 for RAM optimization
 	sqldb.SetConnMaxLifetime(5 * time.Minute)
 	sqldb.SetConnMaxIdleTime(3 * time.Minute) // Recycle idle connections to prevent stacking
 
