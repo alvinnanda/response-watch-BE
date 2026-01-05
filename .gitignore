@@ -19,6 +19,7 @@ vendor/
 
 # Environment variables
 .env
+.env.*
 
 # Air live reload
 tmp/
@@ -38,3 +39,9 @@ Thumbs.db
 # Build output
 bin/
 dist/
+
+# Firebase cache
+.firebase/
+
+# Deployment
+Procfile
