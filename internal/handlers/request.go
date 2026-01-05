@@ -1086,12 +1086,12 @@ func (h *RequestHandler) Delete(c fiber.Ctx) error {
 		})
 	}
 
-	requestID := c.Params("id")
+	requestUUID := c.Params("uuid")
 	ctx := context.Background()
 
 	result, err := database.DB.NewDelete().
 		Model((*models.Request)(nil)).
-		Where("id = ?", requestID).
+		Where("uuid = ?", requestUUID).
 		Where("user_id = ?", userID).
 		Exec(ctx)
 
