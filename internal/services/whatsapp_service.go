@@ -10,18 +10,30 @@ import (
 )
 
 type WhatsAppService struct {
-	apiURL   string
-	deviceID string
-	username string
-	password string
+	apiURL     string
+	deviceID   string
+	username   string
+	password   string
+	httpClient *http.Client
 }
 
 func NewWhatsAppService() *WhatsAppService {
+	// Optimized HTTP client with connection limits for low memory
+	transport := &http.Transport{
+		MaxIdleConns:        5,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     60 * time.Second,
+	}
+
 	return &WhatsAppService{
 		apiURL:   os.Getenv("WHATSAPP_API_URL"),
 		deviceID: os.Getenv("WHATSAPP_DEVICE_ID"),
 		username: os.Getenv("WHATSAPP_API_USER"),
 		password: os.Getenv("WHATSAPP_API_PASSWORD"),
+		httpClient: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: transport,
+		},
 	}
 }
 
@@ -77,8 +89,7 @@ func (s *WhatsAppService) SendMessage(phone, message string) error {
 		req.SetBasicAuth(s.username, s.password)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

@@ -8,47 +8,52 @@ const (
 )
 
 type PlanLimits struct {
-	MonthlyRequests int // 0 = unlimited
-	NotesPerRequest int // 0 = unlimited
-	HistoryDays     int // 0 = unlimited
-	VendorGroups    int // 0 = unlimited
-	SecureDesc      bool
-	Reminder        bool
+	MonthlyRequests  int // 0 = unlimited
+	NotesPerRequest  int // 0 = unlimited
+	HistoryDays      int // 0 = unlimited
+	VendorGroups     int // 0 = unlimited
+	SecureDesc       bool
+	Reminder         bool
+	PublicMonitoring bool
 }
 
 func GetPlanLimits(plan string) PlanLimits {
 	limits := map[string]PlanLimits{
 		PlanFree: {
-			MonthlyRequests: 10,
-			NotesPerRequest: 3,
-			HistoryDays:     30,
-			VendorGroups:    1,
-			SecureDesc:      false,
-			Reminder:        false,
+			MonthlyRequests:  10,
+			NotesPerRequest:  3,
+			HistoryDays:      30,
+			VendorGroups:     1,
+			SecureDesc:       false,
+			Reminder:         false,
+			PublicMonitoring: false,
 		},
 		PlanBasic: {
-			MonthlyRequests: 0, // unlimited
-			NotesPerRequest: 10,
-			HistoryDays:     90,
-			VendorGroups:    3,
-			SecureDesc:      false,
-			Reminder:        false,
+			MonthlyRequests:  0, // unlimited
+			NotesPerRequest:  10,
+			HistoryDays:      90,
+			VendorGroups:     3,
+			SecureDesc:       false,
+			Reminder:         false,
+			PublicMonitoring: true,
 		},
 		PlanPro: {
-			MonthlyRequests: 0,
-			NotesPerRequest: 0, // unlimited
-			HistoryDays:     365,
-			VendorGroups:    0, // unlimited
-			SecureDesc:      true,
-			Reminder:        true,
+			MonthlyRequests:  0,
+			NotesPerRequest:  0, // unlimited
+			HistoryDays:      365,
+			VendorGroups:     0, // unlimited
+			SecureDesc:       true,
+			Reminder:         true,
+			PublicMonitoring: true,
 		},
 		PlanEnterprise: {
-			MonthlyRequests: 0,
-			NotesPerRequest: 0,
-			HistoryDays:     0, // unlimited
-			VendorGroups:    0, // unlimited
-			SecureDesc:      true,
-			Reminder:        true,
+			MonthlyRequests:  0,
+			NotesPerRequest:  0,
+			HistoryDays:      0, // unlimited
+			VendorGroups:     0, // unlimited
+			SecureDesc:       true,
+			Reminder:         true,
+			PublicMonitoring: true,
 		},
 	}
 

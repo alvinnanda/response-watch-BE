@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/boscod/responsewatch/internal/middleware"
+	"github.com/boscod/responsewatch/internal/models"
 	"github.com/boscod/responsewatch/internal/services"
 	"github.com/gofiber/fiber/v3"
 )
@@ -262,6 +263,26 @@ func (h *AuthHandler) UpdateProfile(c fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
+
+	// Validate public monitoring restriction
+	if req.IsPublic != nil && *req.IsPublic {
+		currentUser, err := h.authService.GetUserByID(ctx, userID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":   "Internal Server Error",
+				"message": "Failed to fetch user profile",
+			})
+		}
+
+		limits := models.GetPlanLimits(currentUser.Plan)
+		if !limits.PublicMonitoring {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+				"error":   "Forbidden",
+				"message": "Public monitoring is available on Basic plan or higher. Upgrade to Basic.",
+			})
+		}
+	}
+
 	user, err := h.authService.UpdateProfile(ctx, userID, req.Username, req.FullName, req.Organization, req.IsPublic, req.NotifyEmail)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

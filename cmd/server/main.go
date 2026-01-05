@@ -74,18 +74,19 @@ func main() {
 			// Proceed without RabbitMQ? Or fail?
 			// For this feature, maybe just log error but allow server to run (graceful degradation)
 		} else {
-			// Start Worker
-			noteService := services.NewNoteService()
-			emailService := services.NewEmailService()
-			whatsappService := services.NewWhatsAppService()
-			notificationService := services.NewNotificationService(emailService)
-			noteWorker := workers.NewNoteWorker(noteService, emailService, whatsappService, notificationService)
-
 			// Context for worker cancellation
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
+			// Start Worker (services initialized lazily inside goroutine)
 			go func() {
+				// Lazy initialize services only when worker starts
+				noteService := services.NewNoteService()
+				emailService := services.NewEmailService()
+				whatsappService := services.NewWhatsAppService()
+				notificationService := services.NewNotificationService(emailService)
+				noteWorker := workers.NewNoteWorker(noteService, emailService, whatsappService, notificationService)
+
 				if err := noteWorker.StartWorker(ctx); err != nil {
 					log.Printf("Worker failed: %v", err)
 				}
