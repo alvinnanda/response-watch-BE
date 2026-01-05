@@ -37,36 +37,47 @@ type User struct {
 
 // UserResponse is the safe representation for API responses
 type UserResponse struct {
-	ID            int64   `json:"id"`
-	Username      string  `json:"username"`
-	Email         string  `json:"email"`
-	FullName      *string `json:"full_name,omitempty"`
-	Organization  *string `json:"organization,omitempty"`
-	IsActive      bool    `json:"is_active"`
-	IsPublic      bool    `json:"is_public"`
-	EmailVerified bool    `json:"email_verified"`
-	Role          string  `json:"role"` // For frontend compatibility
-	Plan          string  `json:"plan"`
-	NotifyEmail   bool    `json:"notify_email"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
+	ID                    int64   `json:"id"`
+	Username              string  `json:"username"`
+	Email                 string  `json:"email"`
+	FullName              *string `json:"full_name,omitempty"`
+	Organization          *string `json:"organization,omitempty"`
+	IsActive              bool    `json:"is_active"`
+	IsPublic              bool    `json:"is_public"`
+	EmailVerified         bool    `json:"email_verified"`
+	Role                  string  `json:"role"` // For frontend compatibility
+	Plan                  string  `json:"plan"`
+	SubscriptionExpiresAt *string `json:"subscription_expires_at,omitempty"`
+	NotifyEmail           bool    `json:"notify_email"`
+	CreatedAt             string  `json:"created_at"`
+	UpdatedAt             string  `json:"updated_at"`
 }
 
 func (u *User) ToResponse() *UserResponse {
+	var subExpiresAt *string
+	if u.SubscriptionExpiresAt != nil {
+		formatted := u.SubscriptionExpiresAt.Format(time.RFC3339)
+		subExpiresAt = &formatted
+		println("DEBUG: ToResponse mapping expiration:", formatted)
+	} else {
+		println("DEBUG: ToResponse skipping expiration (nil)")
+	}
+
 	return &UserResponse{
-		ID:            u.ID,
-		Username:      u.Username,
-		Email:         u.Email,
-		FullName:      u.FullName,
-		Organization:  u.Organization,
-		IsActive:      u.IsActive,
-		IsPublic:      u.IsPublic,
-		EmailVerified: u.EmailVerified,
-		Role:          "user", // Default role
-		Plan:          u.Plan,
-		NotifyEmail:   u.NotifyEmail,
-		CreatedAt:     u.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:     u.UpdatedAt.Format(time.RFC3339),
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		FullName:              u.FullName,
+		Organization:          u.Organization,
+		IsActive:              u.IsActive,
+		IsPublic:              u.IsPublic,
+		EmailVerified:         u.EmailVerified,
+		Role:                  "user", // Default role
+		Plan:                  u.Plan,
+		SubscriptionExpiresAt: subExpiresAt,
+		NotifyEmail:           u.NotifyEmail,
+		CreatedAt:             u.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:             u.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
