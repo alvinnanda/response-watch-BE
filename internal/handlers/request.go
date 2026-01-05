@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/boscod/responsewatch/internal/database"
@@ -1425,30 +1426,44 @@ func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).SendString("Request not found")
 	}
 
-	// Decrypt Title
-	title, _ := h.cryptoService.Decrypt(request.TitleEncrypted)
+	// Hybrid Title: Use plaintext if available, otherwise decrypt (fallback)
+	var title string
+	if request.Title != "" {
+		title = request.Title
+	} else if request.TitleEncrypted != "" {
+		title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	} else {
+		title = "Untitled Request"
+	}
 
 	// Generate Time Info
 	var timeInfo string
 	now := time.Now()
 
-	switch request.Status {
-	case models.StatusWaiting:
-		duration := now.Sub(request.CreatedAt)
-		timeInfo = fmt.Sprintf("Waiting for %s", formatDuration(duration))
-	case models.StatusInProgress:
-		if request.StartedAt != nil {
-			duration := now.Sub(*request.StartedAt)
-			timeInfo = fmt.Sprintf("In Progress for %s", formatDuration(duration))
-		} else {
-			timeInfo = "In Progress"
-		}
-	case models.StatusDone:
-		if request.DurationSeconds != nil {
-			duration := time.Duration(*request.DurationSeconds) * time.Second
-			timeInfo = fmt.Sprintf("Completed in %s", formatDuration(duration))
-		} else {
-			timeInfo = "Completed"
+	// Determine effective status and time info
+	status := request.Status
+	if status == models.StatusWaiting && request.ScheduledTime != nil && request.ScheduledTime.After(now) {
+		status = "scheduled"
+		timeInfo = fmt.Sprintf("Dijadwalkan pada %s", request.ScheduledTime.Format("2 Jan 2006, 15:04"))
+	} else {
+		switch request.Status {
+		case models.StatusWaiting:
+			duration := now.Sub(request.CreatedAt)
+			timeInfo = fmt.Sprintf("Menunggu selama %s", formatDuration(duration))
+		case models.StatusInProgress:
+			if request.StartedAt != nil {
+				duration := now.Sub(*request.StartedAt)
+				timeInfo = fmt.Sprintf("Sedang dikerjakan selama %s", formatDuration(duration))
+			} else {
+				timeInfo = "Sedang dikerjakan"
+			}
+		case models.StatusDone:
+			if request.DurationSeconds != nil {
+				duration := time.Duration(*request.DurationSeconds) * time.Second
+				timeInfo = fmt.Sprintf("Selesai dalam %s", formatDuration(duration))
+			} else {
+				timeInfo = "Selesai"
+			}
 		}
 	}
 
@@ -1479,8 +1494,8 @@ func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
         .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); max-width: 400px; width: 90%%; text-align: center; }
         h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
         p { color: #52525b; margin-bottom: 1.5rem; }
-        .btn { display: inline-block; background-color: #2563eb; color: white; padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
-        .btn:hover { background-color: #1d4ed8; }
+        .btn { display: inline-block; background-color: #000000ff; color: white; padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background-color 0.2s; }
+        .btn:hover { background-color: #202020ff; }
     </style>
 </head>
 <body>
@@ -1497,14 +1512,14 @@ func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
     </script>
 </body>
 </html>`,
-		title,                    // Title tag
-		frontendURL,              // og:url
-		title,                    // og:title
-		request.Status, timeInfo, // og:desc
-		title,                    // twitter:title
-		request.Status, timeInfo, // twitter:desc
-		title,                    // h1
-		request.Status, timeInfo, // p content
+		title,            // Title tag
+		frontendURL,      // og:url
+		title,            // og:title
+		status, timeInfo, // og:desc - MODIFIED to use status variable
+		title,            // twitter:title
+		status, timeInfo, // twitter:desc - MODIFIED to use status variable
+		title,            // h1
+		status, timeInfo, // p content - MODIFIED to use status variable
 		frontendURL, // button href
 		frontendURL, // script redirect
 	)
@@ -1514,14 +1529,38 @@ func (h *RequestHandler) GetSharePage(c fiber.Ctx) error {
 }
 
 func formatDuration(d time.Duration) string {
-	d = d.Round(time.Minute)
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	if h > 0 {
-		return fmt.Sprintf("%dh %dm", h, m)
+	totalSeconds := int(d.Seconds())
+	if totalSeconds < 60 {
+		return fmt.Sprintf("%d detik", totalSeconds)
 	}
-	return fmt.Sprintf("%dm", m)
+
+	minutes := int(d.Minutes()) % 60
+	hours := int(d.Hours()) % 24
+	days := int(d.Hours()) / 24
+
+	weeks := days / 7
+	remainingDays := days % 7
+
+	var parts []string
+	if weeks > 0 {
+		parts = append(parts, fmt.Sprintf("%d minggu", weeks))
+	}
+	if remainingDays > 0 {
+		parts = append(parts, fmt.Sprintf("%d hari", remainingDays))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%d jam", hours))
+	}
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%d menit", minutes))
+	}
+
+	// Fallback if something weird happens (e.g. 0 minutes but > 60 seconds?)
+	if len(parts) == 0 {
+		return "0 menit"
+	}
+
+	return strings.Join(parts, " ")
 }
 
 // GetPublicRequestsByUsername handles getting requests by username (public monitoring)
