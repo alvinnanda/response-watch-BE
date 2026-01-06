@@ -1299,7 +1299,11 @@ func (h *RequestHandler) StartResponse(c fiber.Ctx) error {
 
 	// Reload and return
 	database.DB.NewSelect().Model(request).Where("id = ?", request.ID).Scan(ctx)
-	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+
+	// Hybrid Title: Use plaintext if available, otherwise decrypt (fallback)
+	if request.Title == "" && request.TitleEncrypted != "" {
+		request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	}
 	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
 
 	// Trigger notification for status change
@@ -1397,7 +1401,11 @@ func (h *RequestHandler) FinishResponse(c fiber.Ctx) error {
 
 	// Reload and return
 	database.DB.NewSelect().Model(request).Where("id = ?", request.ID).Scan(ctx)
-	request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+
+	// Hybrid Title: Use plaintext if available, otherwise decrypt (fallback)
+	if request.Title == "" && request.TitleEncrypted != "" {
+		request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	}
 	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
 	request.ResolutionNotes, _ = h.cryptoService.DecryptPtr(request.ResolutionNotesEncrypted)
 
