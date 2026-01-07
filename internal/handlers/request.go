@@ -1199,7 +1199,6 @@ func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 
 	err := database.DB.NewSelect().
 		Model(request).
-		Relation("VendorGroup").
 		Where("url_token = ?", token).
 		Where("deleted_at IS NULL").
 		Scan(ctx)
