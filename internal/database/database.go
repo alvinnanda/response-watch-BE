@@ -60,16 +60,19 @@ func attemptConnect(cfg *config.Config) (*bun.DB, error) {
 	// Disable prepared statements by using simple query protocol
 	connector := pgdriver.NewConnector(
 		pgdriver.WithDSN(cfg.DatabaseURL),
+		pgdriver.WithDialTimeout(10*time.Second), // Faster failure detection
 		pgdriver.WithReadTimeout(30*time.Second),
 		pgdriver.WithWriteTimeout(30*time.Second),
 	)
 	sqldb := sql.OpenDB(connector)
 
-	// Configure connection pool - optimized for low memory
-	sqldb.SetMaxOpenConns(4) // Reduced from 10 for RAM optimization
-	sqldb.SetMaxIdleConns(2) // Reduced from 10 for RAM optimization
-	sqldb.SetConnMaxLifetime(5 * time.Minute)
-	sqldb.SetConnMaxIdleTime(3 * time.Minute) // Recycle idle connections to prevent stacking
+	// Configure connection pool - optimized for Supabase Transaction Pooler
+	// Transaction pooler returns connections to pool after each query,
+	// so we can use fewer connections more efficiently
+	sqldb.SetMaxOpenConns(3)                  // Reduced: transaction pooler shares connections
+	sqldb.SetMaxIdleConns(3)                  // Match MaxOpenConns for better reuse
+	sqldb.SetConnMaxLifetime(2 * time.Minute) // Shorter: recycle faster to avoid stale
+	sqldb.SetConnMaxIdleTime(1 * time.Minute) // Shorter: free up pooler connections quickly
 
 	// Create Bun DB instance
 	db := bun.NewDB(sqldb, pgdialect.New())
