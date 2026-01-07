@@ -42,7 +42,7 @@ func Load() (*Config, error) {
 		Port:           getEnv("PORT", "3000"),
 		Env:            getEnv("ENV", "development"),
 		DatabaseURL:    getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/response_watch?sslmode=disable"),
-		RabbitMQURL:    getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+		RabbitMQURL:    getEnv("RABBITMQ_URL", ""), // Empty default - RabbitMQ is optional
 		JWTSecret:      getEnv("JWT_SECRET", "change-me-in-production"),
 		SessionSecret:  getEnv("SESSION_SECRET", "change-me-in-production"),
 		AppSecret:      getEnv("APP_SECRET", "32-byte-key-for-aes-encryption!"),

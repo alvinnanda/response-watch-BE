@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/boscod/responsewatch/config"
 	"github.com/boscod/responsewatch/internal/database"
@@ -22,6 +23,9 @@ import (
 )
 
 func main() {
+	startTime := time.Now()
+	log.Printf("🚀 Server starting at %s", startTime.Format(time.RFC3339))
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -43,13 +47,14 @@ func main() {
 	cryptoService := services.NewCryptoService(cfg.AppSecret)
 	authService := services.NewAuthService(jwtService, cryptoService)
 
-	// Create Fiber app
+	// Create Fiber app - optimized for low-memory environments
 	app := fiber.New(fiber.Config{
-		AppName:       "ResponseWatch API",
-		CaseSensitive: true,
-		StrictRouting: false,
-		ServerHeader:  "ResponseWatch",
-		ErrorHandler:  customErrorHandler,
+		AppName:           "ResponseWatch API",
+		CaseSensitive:     true,
+		StrictRouting:     false,
+		ServerHeader:      "ResponseWatch",
+		ReduceMemoryUsage: true, // Important for Render free tier (512MB RAM)
+		ErrorHandler:      customErrorHandler,
 	})
 
 	// Global middleware
@@ -99,19 +104,26 @@ func main() {
 	// Setup routes
 	routes.SetupRoutes(app, jwtService, cryptoService, authService)
 
-	// Graceful shutdown
+	// Channel to signal shutdown completion
+	shutdownComplete := make(chan struct{})
+
+	// Graceful shutdown handler
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-		log.Println("Shutting down server...")
+		sig := <-sigChan
+		log.Printf("⚠️ Received signal: %v. Shutting down server...", sig)
+
 		if err := app.Shutdown(); err != nil {
 			log.Printf("Error shutting down: %v", err)
 		}
+
+		close(shutdownComplete)
 	}()
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Port)
+	log.Printf("✅ Server ready in %v", time.Since(startTime))
 	log.Printf("Starting server on %s", addr)
 	log.Printf("Environment: %s", cfg.Env)
 	log.Printf("Allowed origins: %v", cfg.AllowedOrigins)
@@ -119,6 +131,12 @@ func main() {
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+
+	// Wait for shutdown to complete, then exit with code 1
+	// This tells Render to auto-restart the service
+	<-shutdownComplete
+	log.Println("🔄 Server shutdown complete. Exiting with code 1 for auto-restart...")
+	os.Exit(1)
 }
 
 func customErrorHandler(c fiber.Ctx, err error) error {

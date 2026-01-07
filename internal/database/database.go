@@ -15,11 +15,11 @@ import (
 
 var DB *bun.DB
 
-// Retry configuration
+// Retry configuration - optimized for Render free tier (fast startup required)
 const (
-	maxRetries     = 5
-	initialBackoff = 2 * time.Second
-	maxBackoff     = 30 * time.Second
+	maxRetries     = 3                // Reduced from 5 for faster startup
+	initialBackoff = 1 * time.Second  // Reduced from 2s
+	maxBackoff     = 10 * time.Second // Reduced from 30s
 	backoffFactor  = 2
 )
 

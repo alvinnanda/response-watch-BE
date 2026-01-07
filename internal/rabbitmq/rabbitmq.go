@@ -37,7 +37,11 @@ func (c *RabbitMQClient) connect() error {
 	var err error
 
 	log.Printf("Attempting to connect to RabbitMQ...")
-	c.Conn, err = amqp.Dial(c.URL)
+
+	// Use DialConfig with timeout to prevent hanging during startup
+	c.Conn, err = amqp.DialConfig(c.URL, amqp.Config{
+		Dial: amqp.DefaultDial(10 * time.Second), // 10 second connection timeout
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
@@ -148,15 +152,18 @@ func (c *RabbitMQClient) watchConnection() {
 }
 
 func (c *RabbitMQClient) reconnect() {
-	for {
+	maxReconnectAttempts := 10 // Limit reconnection attempts
+	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
 		time.Sleep(ReconnectDelay)
 		if err := c.connect(); err == nil {
 			log.Println("RabbitMQ reconnected")
 			return
 		} else {
-			log.Printf("Failed to reconnect to RabbitMQ: %v. Retrying in %v...", err, ReconnectDelay)
+			log.Printf("Failed to reconnect to RabbitMQ (attempt %d/%d): %v", attempt, maxReconnectAttempts, err)
 		}
 	}
+	log.Printf("⚠️ RabbitMQ: Max reconnection attempts (%d) reached. Giving up.", maxReconnectAttempts)
+	// Don't exit, just stop trying - server continues without RabbitMQ
 }
 
 // Close closes the connection and channel
