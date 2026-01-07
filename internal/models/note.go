@@ -16,6 +16,12 @@ const (
 	ReminderChannelWhatsApp ReminderChannel = "whatsapp"
 )
 
+// NoteLinkedRequest is a slim struct for note-request relation
+type NoteLinkedRequest struct {
+	UUID  uuid.UUID `bun:"uuid" json:"uuid"`
+	Title string    `bun:"title" json:"title"`
+}
+
 type Note struct {
 	bun.BaseModel `bun:"table:notes,alias:n"`
 
@@ -34,6 +40,7 @@ type Note struct {
 
 	User        *User      `bun:"rel:belongs-to,join:user_id=id" json:"user,omitempty"`
 	RequestUUID *uuid.UUID `bun:"request_uuid,type:uuid" json:"request_uuid,omitempty"`
+	Request     *Request   `bun:"rel:belongs-to,join:request_uuid=uuid" json:"request,omitempty"`
 	CreatedAt   time.Time  `bun:"created_at,nullzero,notnull,default:current_timestamp" json:"created_at"`
 	UpdatedAt   time.Time  `bun:"updated_at,nullzero,default:now()" json:"updated_at"`
 }

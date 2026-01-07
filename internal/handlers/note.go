@@ -251,8 +251,73 @@ func (h *NoteHandler) GetNotes(c fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch notes"})
 	}
 
+	// Transform notes to response with slim request
+	type NoteLinkedRequest struct {
+		UUID     string `json:"uuid"`
+		Title    string `json:"title"`
+		URLToken string `json:"url_token"`
+	}
+
+	type NoteResponse struct {
+		ID              string             `json:"id"`
+		UserID          int64              `json:"user_id"`
+		Title           string             `json:"title"`
+		Content         string             `json:"content"`
+		RemindAt        *string            `json:"remind_at,omitempty"`
+		IsReminder      bool               `json:"is_reminder"`
+		ReminderChannel string             `json:"reminder_channel"`
+		WebhookURL      *string            `json:"webhook_url,omitempty"`
+		WebhookPayload  *string            `json:"webhook_payload,omitempty"`
+		WhatsAppPhone   *string            `json:"whatsapp_phone,omitempty"`
+		BackgroundColor string             `json:"background_color,omitempty"`
+		Tagline         string             `json:"tagline,omitempty"`
+		RequestUUID     *string            `json:"request_uuid,omitempty"`
+		Request         *NoteLinkedRequest `json:"request,omitempty"`
+		CreatedAt       string             `json:"created_at"`
+		UpdatedAt       string             `json:"updated_at"`
+	}
+
+	noteResponses := make([]NoteResponse, len(notes))
+	for i, n := range notes {
+		resp := NoteResponse{
+			ID:              n.ID.String(),
+			UserID:          n.UserID,
+			Title:           n.Title,
+			Content:         n.Content,
+			IsReminder:      n.IsReminder,
+			ReminderChannel: string(n.ReminderChannel),
+			WebhookURL:      n.WebhookURL,
+			WebhookPayload:  n.WebhookPayload,
+			WhatsAppPhone:   n.WhatsAppPhone,
+			BackgroundColor: n.BackgroundColor,
+			Tagline:         n.Tagline,
+			CreatedAt:       n.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:       n.UpdatedAt.Format(time.RFC3339),
+		}
+
+		if n.RemindAt != nil {
+			remindAtStr := n.RemindAt.Format(time.RFC3339)
+			resp.RemindAt = &remindAtStr
+		}
+
+		if n.RequestUUID != nil {
+			reqUUIDStr := n.RequestUUID.String()
+			resp.RequestUUID = &reqUUIDStr
+		}
+
+		if n.Request != nil {
+			resp.Request = &NoteLinkedRequest{
+				UUID:     n.Request.UUID.String(),
+				Title:    n.Request.Title,
+				URLToken: n.Request.URLToken,
+			}
+		}
+
+		noteResponses[i] = resp
+	}
+
 	return c.JSON(fiber.Map{
-		"notes": notes,
+		"notes": noteResponses,
 		"pagination": fiber.Map{
 			"total": count,
 			"page":  (filters.Offset / filters.Limit) + 1,

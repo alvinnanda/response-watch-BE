@@ -105,22 +105,23 @@ func (s *NoteService) GetNotes(ctx context.Context, filters NoteFilters) ([]mode
 	var notes []models.Note
 	query := database.DB.NewSelect().
 		Model(&notes).
-		Where("user_id = ?", filters.UserID).
-		Order("created_at DESC") // Default sort
+		Where("n.user_id = ?", filters.UserID).
+		Relation("Request").
+		Order("n.created_at DESC") // Default sort
 
 	if filters.RequestUUID != nil {
-		query.Where("request_uuid = ?", filters.RequestUUID)
+		query.Where("n.request_uuid = ?", filters.RequestUUID)
 	}
 	if filters.StartDate != nil {
-		query.Where("created_at >= ?", filters.StartDate)
+		query.Where("n.created_at >= ?", filters.StartDate)
 	}
 	if filters.EndDate != nil {
-		query.Where("created_at <= ?", filters.EndDate)
+		query.Where("n.created_at <= ?", filters.EndDate)
 	}
 	if filters.Search != "" {
 		query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
-			return q.Where("title ILIKE ?", "%"+filters.Search+"%").
-				WhereOr("content ILIKE ?", "%"+filters.Search+"%")
+			return q.Where("n.title ILIKE ?", "%"+filters.Search+"%").
+				WhereOr("n.content ILIKE ?", "%"+filters.Search+"%")
 		})
 	}
 
@@ -141,6 +142,7 @@ func (s *NoteService) GetNotes(ctx context.Context, filters NoteFilters) ([]mode
 		query.Offset(filters.Offset)
 	}
 
+	// Execute query
 	count, err := query.ScanAndCount(ctx)
 	if err != nil {
 		return nil, 0, err
