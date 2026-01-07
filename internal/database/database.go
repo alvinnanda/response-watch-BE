@@ -56,8 +56,14 @@ func Connect(cfg *config.Config) (*bun.DB, error) {
 }
 
 func attemptConnect(cfg *config.Config) (*bun.DB, error) {
-	// Create SQL DB connection
-	sqldb := sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(cfg.DatabaseURL)))
+	// Create SQL DB connection with PgBouncer/Supabase Transaction Pooler compatibility
+	// Disable prepared statements by using simple query protocol
+	connector := pgdriver.NewConnector(
+		pgdriver.WithDSN(cfg.DatabaseURL),
+		pgdriver.WithReadTimeout(30*time.Second),
+		pgdriver.WithWriteTimeout(30*time.Second),
+	)
+	sqldb := sql.OpenDB(connector)
 
 	// Configure connection pool - optimized for low memory
 	sqldb.SetMaxOpenConns(4) // Reduced from 10 for RAM optimization
