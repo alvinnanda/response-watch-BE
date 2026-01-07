@@ -1199,6 +1199,7 @@ func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 
 	err := database.DB.NewSelect().
 		Model(request).
+		Relation("VendorGroup").
 		Where("url_token = ?", token).
 		Where("deleted_at IS NULL").
 		Scan(ctx)
@@ -1612,26 +1613,31 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 	// Base query - is_public is at user level, not request level
 	query := database.DB.NewSelect().
 		Model(&requests).
-		Where("user_id = ?", user.ID).
-		Where("deleted_at IS NULL")
+		Relation("VendorGroup").
+		Where("r.user_id = ?", user.ID).
+		Where("r.deleted_at IS NULL")
 
 	// Filter by date range if provided, otherwise default to "today" (last 24h) or specific logic?
 	// For public monitoring, usually we show active stuff or recent stuff.
 	// Let's support query params similar to List, but maybe restricted.
 	status := c.Query("status")
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("r.status = ?", status)
 	}
 
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
 	if startDate != "" {
-		query = query.Where("created_at >= ?", startDate)
+		query = query.Where("r.created_at >= ?", startDate)
 	}
 	if endDate != "" {
-		query = query.Where("created_at <= ?::date + INTERVAL '1 day'", endDate)
+		query = query.Where("r.created_at <= ?::date + INTERVAL '1 day'", endDate)
 	}
+
+	// Get user plan limits for public monitoring
+	planLimits := models.GetPlanLimits(user.Plan)
+	maxResults := planLimits.PublicMonitoringLimit
 
 	// Parse pagination params
 	page := 1
@@ -1653,8 +1659,37 @@ func (h *RequestHandler) GetPublicRequestsByUsername(c fiber.Ctx) error {
 		})
 	}
 
+	// Apply plan limit to total count
+	if maxResults > 0 && total > maxResults {
+		total = maxResults
+	}
+
+	// If offset exceeds the capped total, return empty
+	if offset >= total {
+		return c.JSON(fiber.Map{
+			"requests": []*models.RequestResponse{},
+			"pagination": fiber.Map{
+				"page":        page,
+				"limit":       limit,
+				"total":       total,
+				"total_pages": (total + limit - 1) / limit,
+			},
+			"user": fiber.Map{
+				"username":     user.Username,
+				"full_name":    user.FullName,
+				"organization": user.Organization,
+			},
+		})
+	}
+
+	// Cap the limit if it would exceed maxResults
+	effectiveLimit := limit
+	if maxResults > 0 && offset+limit > maxResults {
+		effectiveLimit = maxResults - offset
+	}
+
 	// Order by latest and apply pagination
-	err = query.Order("created_at DESC").Limit(limit).Offset(offset).Scan(ctx)
+	err = query.Order("r.created_at DESC").Limit(effectiveLimit).Offset(offset).Scan(ctx)
 
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
