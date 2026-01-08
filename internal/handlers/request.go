@@ -1795,7 +1795,8 @@ func (h *RequestHandler) GetDashboardMonitoringRequests(c fiber.Ctx) error {
 
 // VerifyDescriptionPINPayload for PIN verification
 type VerifyDescriptionPINPayload struct {
-	PIN string `json:"pin"`
+	PIN         string `json:"pin"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 // VerifyDescriptionPIN handles verifying PIN for secured descriptions
@@ -1818,9 +1819,42 @@ func (h *RequestHandler) VerifyDescriptionPIN(c fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
-	request := new(models.Request)
 
-	err := database.DB.NewSelect().
+	// Rate Limiting Check
+	ip := middleware.GetRealIP(c)
+	fingerprint := payload.Fingerprint
+
+	// 1. Check if blocked (5 failed attempts in last 15 minutes)
+	limitQuery := database.DB.NewSelect().
+		Model((*models.DeviceUsage)(nil)).
+		Where("action = ?", models.ActionVerifyPinFail).
+		Where("created_at > ?", time.Now().Add(-15*time.Minute))
+
+	if fingerprint != "" {
+		// Check by fingerprint OR IP if fingerprint is provided
+		limitQuery = limitQuery.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
+			return q.Where("fingerprint_hash = ?", fingerprint).WhereOr("ip_address = ?", ip)
+		})
+	} else {
+		// Fallback to IP only
+		limitQuery = limitQuery.Where("ip_address = ?", ip)
+	}
+
+	count, err := limitQuery.Count(ctx)
+	if err != nil {
+		log.Printf("Error checking rate limit: %v", err)
+	}
+
+	if count >= 5 {
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error":   "Too Many Requests",
+			"message": "Terlalu banyak percobaan gagal. Silakan coba lagi dalam 15 menit.",
+		})
+	}
+
+	// 2. Fetch Request
+	request := new(models.Request)
+	err = database.DB.NewSelect().
 		Model(request).
 		Where("url_token = ?", token).
 		Where("deleted_at IS NULL").
@@ -1846,6 +1880,21 @@ func (h *RequestHandler) VerifyDescriptionPIN(c fiber.Ctx) error {
 	inputPINHash := hex.EncodeToString(hash[:])
 
 	if inputPINHash != *request.DescriptionPINHash {
+		// RECORD FAILURE
+		fingerprintHash := fingerprint
+		if fingerprintHash == "" {
+			fingerprintHash = "ip_" + ip // Fallback for not null constraint
+		}
+
+		failure := &models.DeviceUsage{
+			Action:          models.ActionVerifyPinFail,
+			FingerprintHash: fingerprintHash,
+			IPAddress:       &ip,
+		}
+		if _, err := database.DB.NewInsert().Model(failure).Exec(ctx); err != nil {
+			log.Printf("Failed to record PIN failure: %v", err)
+		}
+
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"success": false,
 			"error":   "Invalid PIN",

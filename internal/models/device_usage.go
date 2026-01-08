@@ -21,4 +21,5 @@ type DeviceUsage struct {
 // Action constants
 const (
 	ActionCreateRequest = "create_request"
+	ActionVerifyPinFail = "verify_pin_fail"
 )
