@@ -73,7 +73,7 @@ func (s *NoteService) CreateOrUpdateNote(ctx context.Context, note *models.Note)
 
 		if delay > 0 {
 			// Publish to RabbitMQ Waiting Queue
-			err = rabbitmq.PublishScheduleNote(note.ID.String(), delay)
+			err = rabbitmq.PublishScheduleNote(note.ID.String(), *note.RemindAt, delay)
 			if err != nil {
 				return fmt.Errorf("note saved but failed to safe reminder: %w", err)
 			}

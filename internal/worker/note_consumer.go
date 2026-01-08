@@ -87,8 +87,16 @@ func (w *NoteWorker) StartWorker(ctx context.Context) error {
 }
 
 func (w *NoteWorker) processMessage(ctx context.Context, d amqp.Delivery) {
-	noteIDStr := string(d.Body)
-	log.Printf(" [x] Received reminder for Note ID: %s", noteIDStr)
+	payload := string(d.Body)
+	log.Printf(" [x] Received reminder payload: %s", payload)
+
+	// Parse payload: "noteID|remindAtTimestamp"
+	parts := strings.Split(payload, "|")
+	noteIDStr := parts[0]
+	var scheduledRemindAt int64
+	if len(parts) > 1 {
+		fmt.Sscanf(parts[1], "%d", &scheduledRemindAt)
+	}
 
 	// 1. Parsing ID
 	noteID, err := uuid.Parse(noteIDStr)
@@ -114,22 +122,17 @@ func (w *NoteWorker) processMessage(ctx context.Context, d amqp.Delivery) {
 		return
 	}
 
-	// b. Check if remidner time is valid (prevent race conditions or old messages)
-	// Allow a small grace period (e.g. processed within 5 mins of scheduled time? or just "is it passed?")
-	// Actually, if it's in the queue, it's passed. Logic is: Is it TOO late? or did user update it to Future again?
-	// If user updated `remind_at` to future, this message (from old schedule) should be ignored if it doesn't match current `remind_at`.
-	// Simple check: Diff < small_threshold? OR strictly: timestamp in DB < Now + threshold?
-	// A better check for "User changed mind and rescheduled":
-	// The message only has ID. We don't know the ORIGINAL scheduled time of THIS message.
-	// Ideal payload includes "ScheduledFor" timestamp to compare.
-	// BUT req says "Payload: Hanya kirim note_id".
-	// So we assume if `remind_at` is in the past (since it's a reminder for "now" or "past"), it's valid to send for general Logic.
-	// If user Rescheduled to Next Year, `remind_at` in DB will be > Now.
-	// So: If Note.RemindAt > Now + 1 minute, it means it was rescheduled. Ignore this old ping.
-	if note.RemindAt != nil && note.RemindAt.After(time.Now().Add(1*time.Minute)) {
-		log.Printf(" [i] Note %s: Reminder appears to be rescheduled to %v. Skipping old trigger.", note.ID, note.RemindAt)
-		d.Ack(false)
-		return
+	// b. Check if this message matches the current scheduled time
+	// If user rescheduled the reminder, the DB remindAt will be different from the message's scheduledRemindAt
+	if scheduledRemindAt > 0 && note.RemindAt != nil {
+		currentRemindAt := note.RemindAt.Unix()
+		// Allow 60 second tolerance for minor time differences
+		if abs(currentRemindAt-scheduledRemindAt) > 60 {
+			log.Printf(" [i] Note %s: Reminder was rescheduled (message: %d, current: %d). Skipping old trigger.",
+				note.ID, scheduledRemindAt, currentRemindAt)
+			d.Ack(false)
+			return
+		}
 	}
 
 	// 4. Execute (Simulate Sending)
@@ -137,6 +140,14 @@ func (w *NoteWorker) processMessage(ctx context.Context, d amqp.Delivery) {
 
 	// 5. Ack
 	d.Ack(false)
+}
+
+// abs returns the absolute value of an int64
+func abs(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func (w *NoteWorker) sendNotification(note *models.Note) {

@@ -179,13 +179,17 @@ func Close() {
 }
 
 // PublishScheduleNote publishes a note ID to the waiting queue with a specific expiration delay
-func PublishScheduleNote(noteID string, delay time.Duration) error {
+// Message format: "noteID|remindAtTimestamp" to validate rescheduling
+func PublishScheduleNote(noteID string, remindAt time.Time, delay time.Duration) error {
 	if Client == nil || Client.Channel == nil || Client.Channel.IsClosed() {
 		return fmt.Errorf("RabbitMQ client not (yet) connected")
 	}
 
 	// Convert duration to milliseconds string for expiration
 	expirationMs := fmt.Sprintf("%d", delay.Milliseconds())
+
+	// Payload includes remindAt timestamp for validation in worker
+	payload := fmt.Sprintf("%s|%d", noteID, remindAt.Unix())
 
 	err := Client.Channel.Publish(
 		ExchangeName,   // exchange
@@ -194,7 +198,7 @@ func PublishScheduleNote(noteID string, delay time.Duration) error {
 		false,          // immediate
 		amqp.Publishing{
 			ContentType:  "text/plain",
-			Body:         []byte(noteID),
+			Body:         []byte(payload),
 			Expiration:   expirationMs, // TTL in milliseconds
 			DeliveryMode: amqp.Persistent,
 		},
