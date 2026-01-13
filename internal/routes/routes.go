@@ -75,6 +75,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	protected.Get("/requests/monitoring", requestHandler.GetDashboardMonitoringRequests)
 	protected.Get("/requests", requestHandler.List)
 	protected.Post("/requests", requestHandler.Create)
+	protected.Get("/requests/export", requestHandler.DownloadExcel)
 	protected.Get("/requests/:id", requestHandler.Get)
 	protected.Put("/requests/:id", requestHandler.Update)
 	protected.Delete("/requests/:uuid", requestHandler.Delete)

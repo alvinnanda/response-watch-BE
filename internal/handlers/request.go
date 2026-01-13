@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +21,7 @@ import (
 	"github.com/boscod/responsewatch/internal/services"
 	"github.com/gofiber/fiber/v3"
 	"github.com/uptrace/bun"
+	"github.com/xuri/excelize/v2"
 )
 
 type RequestHandler struct {
@@ -1923,4 +1927,215 @@ func generateURLToken(length int) string {
 		b[i] = charset[int(b[i])%len(charset)]
 	}
 	return string(b)
+}
+
+// DownloadExcel handles generating and downloading requests as Excel file
+func (h *RequestHandler) DownloadExcel(c fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	ctx := context.Background()
+
+	// Parse filter params (same as List)
+	status := c.Query("status")
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+	search := c.Query("search")
+	vendorGroupIDStr := c.Query("vendor_group_id")
+
+	// Get user plan for history limits
+	user := new(models.User)
+	err := database.DB.NewSelect().
+		Model(user).
+		Where("id = ?", userID).
+		Scan(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch user",
+		})
+	}
+
+	limits := models.GetPlanLimits(user.Plan)
+
+	var requests []models.Request
+
+	// Build query with vendor group relation
+	query := database.DB.NewSelect().
+		Model(&requests).
+		Relation("VendorGroup").
+		Where("r.user_id = ?", userID).
+		Where("r.deleted_at IS NULL").
+		Order("r.created_at DESC")
+
+	// Apply history retention based on plan
+	if limits.HistoryDays > 0 {
+		cutoffDate := time.Now().AddDate(0, 0, -limits.HistoryDays)
+		query = query.Where("r.created_at >= ?", cutoffDate)
+	}
+
+	// Apply filters (SAME LOGIC AS LIST)
+	if status != "" {
+		query = query.Where("r.status = ?", status)
+	}
+	if startDate != "" {
+		query = query.Where("r.created_at >= ?", startDate)
+	}
+	if endDate != "" {
+		query = query.Where("r.created_at <= ?::date + INTERVAL '1 day'", endDate)
+	}
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		query = query.Where("(r.title ILIKE ? OR r.start_pic ILIKE ? OR r.end_pic ILIKE ?)", searchPattern, searchPattern, searchPattern)
+	}
+	if vendorGroupIDStr != "" {
+		if vendorGroupID, err := strconv.ParseInt(vendorGroupIDStr, 10, 64); err == nil {
+			query = query.Where("r.vendor_group_id = ?", vendorGroupID)
+		}
+	}
+
+	// Fetch ALL matching requests (no pagination)
+	err = query.Scan(ctx)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to fetch requests",
+		})
+	}
+
+	// Decrypt sensitive fields
+	for i := range requests {
+		if requests[i].Title == "" && requests[i].TitleEncrypted != "" {
+			requests[i].Title, _ = h.cryptoService.Decrypt(requests[i].TitleEncrypted)
+		}
+		requests[i].Description, _ = h.cryptoService.DecryptPtr(requests[i].DescriptionEncrypted)
+		requests[i].ResolutionNotes, _ = h.cryptoService.DecryptPtr(requests[i].ResolutionNotesEncrypted)
+	}
+
+	// Generate Excel File
+	f := excelize.NewFile()
+	sheetName := "Requests"
+	f.SetSheetName("Sheet1", sheetName)
+
+	// Set Headers
+	headers := []string{
+		"Link", "Created At", "Title", "Status", "Vendor Group",
+		"Description", "Start PIC", "End PIC", "Started At",
+		"Finished At", "Duration (mins)", "Resolution Notes",
+	}
+
+	// Write headers
+	for i, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheetName, cell, header)
+	}
+
+	// Style header
+	style, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{Type: "pattern", Color: []string{"#E0E0E0"}, Pattern: 1},
+	})
+	f.SetCellStyle(sheetName, "A1", fmt.Sprintf("%s1", string(rune('A'+len(headers)-1))), style)
+
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "https://response-watch.web.app" // Fallback
+	}
+
+	// Write data
+	for i, req := range requests {
+		row := i + 2
+
+		vendorGroupName := "-"
+		if req.VendorGroup != nil {
+			vendorGroupName = req.VendorGroup.GroupName
+		}
+
+		desc := ""
+		if req.Description != nil {
+			desc = *req.Description
+			// 1. Preserve structure: Replace block terminators with newlines
+			desc = strings.ReplaceAll(desc, "</p>", "\n")
+			desc = strings.ReplaceAll(desc, "<br>", "\n")
+			desc = strings.ReplaceAll(desc, "<br/>", "\n")
+			desc = strings.ReplaceAll(desc, "</div>", "\n")
+
+			// 2. Remove all HTML tags
+			re := regexp.MustCompile(`<[^>]*>`)
+			desc = re.ReplaceAllString(desc, "")
+
+			// 3. Trim extra whitespace
+			desc = strings.TrimSpace(desc)
+		}
+
+		resNotes := ""
+		if req.ResolutionNotes != nil {
+			resNotes = *req.ResolutionNotes
+		}
+
+		startPIC := "-"
+		if req.StartPIC != nil {
+			startPIC = *req.StartPIC
+		}
+
+		endPIC := "-"
+		if req.EndPIC != nil {
+			endPIC = *req.EndPIC
+		}
+
+		startedAt := "-"
+		if req.StartedAt != nil {
+			startedAt = req.StartedAt.Format("02-01-2006 15:04:05")
+		}
+
+		finishedAt := "-"
+		if req.FinishedAt != nil {
+			finishedAt = req.FinishedAt.Format("02-01-2006 15:04:05")
+		}
+
+		durationMins := 0.0
+		if req.DurationSeconds != nil {
+			durationMins = float64(*req.DurationSeconds) / 60.0
+		}
+
+		values := []interface{}{
+			fmt.Sprintf("%s/t/%s", frontendURL, req.URLToken),
+			req.CreatedAt.Format("02-01-2006 15:04:05"),
+			req.Title,
+			req.Status,
+			vendorGroupName,
+			desc,
+			startPIC,
+			endPIC,
+			startedAt,
+			finishedAt,
+			fmt.Sprintf("%.1f", durationMins),
+			resNotes,
+		}
+
+		for col, val := range values {
+			cell, _ := excelize.CoordinatesToCellName(col+1, row)
+			f.SetCellValue(sheetName, cell, val)
+		}
+	}
+
+	// Setup buffer for response
+	buffer, err := f.WriteToBuffer()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to generate excel file",
+		})
+	}
+
+	// Set headers for download
+	filename := fmt.Sprintf("requests_export_%s.xlsx", time.Now().Format("20060102_150405"))
+	c.Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	return c.SendStream(bytes.NewReader(buffer.Bytes()))
 }
