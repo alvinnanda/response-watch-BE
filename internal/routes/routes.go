@@ -18,6 +18,13 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	vendorGroupHandler := handlers.NewVendorGroupHandler()
 	notificationHandler := handlers.NewNotificationHandler(notificationService)
 
+	app.Get("/health", func(c fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"message": "ResponseWatch API is running",
+		})
+	})
+
 	// API group
 	api := app.Group("/api")
 
