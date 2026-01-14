@@ -20,6 +20,7 @@ vendor/
 # Environment variables
 .env
 .env.*
+env.yaml
 
 # Air live reload
 tmp/

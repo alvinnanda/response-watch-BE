@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: responsewatch-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Database
+      - DATABASE_URL=${DATABASE_URL}
+      
+      # App Configuration
+      - PORT=8080
+      - ENV=${ENV:-production}
+      - APP_SECRET=${APP_SECRET}
+      - JWT_SECRET=${JWT_SECRET}
+      
+      # CORS
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      
+      # RabbitMQ (optional)
+      - RABBITMQ_URL=${RABBITMQ_URL:-}
+      
+      # Email Service (optional)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      
+      # WhatsApp Service (optional)
+      - WHATSAPP_API_URL=${WHATSAPP_API_URL:-}
+      - WHATSAPP_API_KEY=${WHATSAPP_API_KEY:-}
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # PostgreSQL Database (optional - for local development)
+  # Uncomment if you want to run database locally
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: responsewatch-db
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_DB=responsewatch
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=postgres
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  # RabbitMQ (optional - for local development)
+  # Uncomment if you want to run RabbitMQ locally
+  # rabbitmq:
+  #   image: rabbitmq:3-management-alpine
+  #   container_name: responsewatch-rabbitmq
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5672:5672"
+  #     - "15672:15672"
+  #   environment:
+  #     - RABBITMQ_DEFAULT_USER=guest
+  #     - RABBITMQ_DEFAULT_PASS=guest
+  #   volumes:
+  #     - rabbitmq_data:/var/lib/rabbitmq
+  #   healthcheck:
+  #     test: ["CMD", "rabbitmq-diagnostics", "ping"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+
+# volumes:
+#   postgres_data:
+#   rabbitmq_data:

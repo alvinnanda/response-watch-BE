@@ -37,7 +37,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	defer database.Close()
 
 	log.Printf("Connected to database successfully")
 	_ = db // Mark as used
@@ -96,8 +95,6 @@ func main() {
 					log.Printf("Worker failed: %v", err)
 				}
 			}()
-
-			defer rabbitmq.Close()
 		}
 	}
 
@@ -114,10 +111,24 @@ func main() {
 		sig := <-sigChan
 		log.Printf("⚠️ Received signal: %v. Shutting down server...", sig)
 
+		// Shutdown Fiber server first (stop accepting new requests)
 		if err := app.Shutdown(); err != nil {
-			log.Printf("Error shutting down: %v", err)
+			log.Printf("Error shutting down server: %v", err)
 		}
 
+		// Close RabbitMQ connection
+		if cfg.RabbitMQURL != "" {
+			log.Println("📦 Closing RabbitMQ connection...")
+			rabbitmq.Close()
+		}
+
+		// Close database connection
+		log.Println("🗄️ Closing database connection...")
+		if err := database.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		}
+
+		log.Println("✅ All resources closed successfully")
 		close(shutdownComplete)
 	}()
 

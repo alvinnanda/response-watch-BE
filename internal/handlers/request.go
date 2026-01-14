@@ -1194,6 +1194,116 @@ func (h *RequestHandler) ReopenRequest(c fiber.Ctx) error {
 	return c.JSON(request.ToResponse())
 }
 
+// AssignVendorPayload for assigning vendor to completed request
+type AssignVendorPayload struct {
+	VendorGroupID int64  `json:"vendor_group_id"`
+	PICName       string `json:"pic_name"`
+}
+
+// AssignVendor handles assigning vendor and PIC to a completed request
+func (h *RequestHandler) AssignVendor(c fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	if userID == 0 {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": "Unauthorized",
+		})
+	}
+
+	requestID := c.Params("id")
+	ctx := context.Background()
+
+	var payload AssignVendorPayload
+	if err := c.Bind().JSON(&payload); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate payload
+	if payload.VendorGroupID == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "vendor_group_id is required",
+		})
+	}
+
+	if payload.PICName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "pic_name is required",
+		})
+	}
+
+	// Fetch request and verify ownership
+	request := new(models.Request)
+	err := database.DB.NewSelect().
+		Model(request).
+		Where("r.id = ?", requestID).
+		Where("r.user_id = ?", userID).
+		Where("r.deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "Request not found",
+		})
+	}
+
+	// Verify status is done
+	if request.Status != models.StatusDone {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   "Bad Request",
+			"message": "Only completed requests can be assigned vendor and PIC",
+		})
+	}
+
+	// Verify vendor group belongs to user
+	vendorGroup := new(models.VendorGroup)
+	err = database.DB.NewSelect().
+		Model(vendorGroup).
+		Where("id = ?", payload.VendorGroupID).
+		Where("user_id = ?", userID).
+		Where("deleted_at IS NULL").
+		Scan(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":   "Not Found",
+			"message": "Vendor group not found",
+		})
+	}
+
+	// Update request with vendor and PIC
+	_, err = database.DB.NewUpdate().
+		Model((*models.Request)(nil)).
+		Set("vendor_group_id = ?", payload.VendorGroupID).
+		Set("start_pic = ?", payload.PICName).
+		Where("id = ?", request.ID).
+		Exec(ctx)
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   "Internal Server Error",
+			"message": "Failed to assign vendor",
+		})
+	}
+
+	// Reload and return with vendor relation
+	database.DB.NewSelect().Model(request).Relation("VendorGroup").Where("id = ?", request.ID).Scan(ctx)
+
+	// Decrypt fields
+	if request.Title == "" && request.TitleEncrypted != "" {
+		request.Title, _ = h.cryptoService.Decrypt(request.TitleEncrypted)
+	}
+	request.Description, _ = h.cryptoService.DecryptPtr(request.DescriptionEncrypted)
+	request.FollowupLink, _ = h.cryptoService.DecryptPtr(request.FollowupLinkEncrypted)
+	request.ResolutionNotes, _ = h.cryptoService.DecryptPtr(request.ResolutionNotesEncrypted)
+
+	return c.JSON(request.ToResponse())
+}
+
 // GetByToken handles getting a request by URL token (public)
 func (h *RequestHandler) GetByToken(c fiber.Ctx) error {
 	token := c.Params("token")

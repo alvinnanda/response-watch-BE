@@ -80,6 +80,7 @@ func SetupRoutes(app *fiber.App, jwtService *services.JWTService, cryptoService 
 	protected.Put("/requests/:id", requestHandler.Update)
 	protected.Delete("/requests/:uuid", requestHandler.Delete)
 	protected.Put("/requests/:id/reopen", requestHandler.ReopenRequest)
+	protected.Put("/requests/:id/assign-vendor", requestHandler.AssignVendor)
 
 	// Vendor Group routes
 	protected.Get("/vendor-groups", vendorGroupHandler.List)

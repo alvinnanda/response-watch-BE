@@ -1,0 +1,41 @@
+# Git files
+.git
+.gitignore
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Development files
+.air.toml
+tmp/
+*.log
+
+# Build artifacts
+responsewatch
+server
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+testdata/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+README.md
+*.md
+!migrations/*.sql
+
+# OS files
+.DS_Store
+Thumbs.db
